@@ -14,8 +14,10 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -24,10 +26,13 @@
 #include <utility>
 #include <vector>
 
+#include <zlib.h>
+
 namespace {
 constexpr int WindowWidth = 1280;
 constexpr int WindowHeight = 720;
-constexpr float CharacterMoveSpeed = 4.0F;
+constexpr float CharacterMoveSpeed = 3.2F;
+constexpr float CharacterAnimationPlaybackSpeed = 0.85F;
 constexpr float ZoomSpeed = 1.25F;
 constexpr float MinCameraDistance = 4.0F;
 constexpr float MaxCameraDistance = 40.0F;
@@ -37,13 +42,17 @@ constexpr float FarPlane = 200.0F;
 constexpr int MaxVertexBones = 4;
 constexpr const char *BodyModelPath = "media/models/Bob.fbx";
 constexpr const char *IdleAnimationPath = "media/anim_x/bob/Bob_Idle.fbx";
+constexpr const char *IdleToWalkAnimationPath =
+    "media/animations/Bob_IdleToWalk.fbx";
 constexpr const char *WalkAnimationPath = "media/anim_x/bob/Bob_Walk.fbx";
+constexpr const char *BodyTexturePath = "media/textures/Body MaleBody01.png";
 
 struct Vertex {
   glm::vec3 position{};
   glm::vec3 staticPosition{};
   glm::vec3 normal{0.0F, 1.0F, 0.0F};
   glm::vec3 staticNormal{0.0F, 1.0F, 0.0F};
+  glm::vec2 texCoord{0.0F, 0.0F};
   std::array<int, MaxVertexBones> boneIds{-1, -1, -1, -1};
   std::array<float, MaxVertexBones> boneWeights{0.0F, 0.0F, 0.0F, 0.0F};
 };
@@ -57,6 +66,22 @@ struct Mesh {
 struct Bone {
   std::string name;
   glm::mat4 offsetMatrix{1.0F};
+};
+
+struct Texture2D {
+  GLuint id = 0;
+  int width = 0;
+  int height = 0;
+
+  [[nodiscard]] bool isLoaded() const { return id != 0; }
+};
+
+struct PngImage {
+  int width = 0;
+  int height = 0;
+  std::vector<unsigned char> pixels;
+
+  [[nodiscard]] bool isLoaded() const { return !pixels.empty(); }
 };
 
 struct SkeletonNode {
@@ -99,6 +124,7 @@ struct AnimationClip {
   std::string name;
   double durationTicks = 0.0;
   double ticksPerSecond = 24.0;
+  bool retargetFirstFrameToBindPose = false;
   std::vector<AnimationChannel> channels;
   std::unordered_map<std::string, std::size_t> channelIndexByNodeName;
 
@@ -134,11 +160,18 @@ struct Camera {
   }
 };
 
+enum class CharacterAnimationState {
+  Idle,
+  IdleToWalk,
+  Walk,
+};
+
 struct Character {
   glm::vec3 position{0.0F, 0.0F, 0.0F};
   glm::vec3 facing{0.0F, 0.0F, 1.0F};
   float animationTime = 0.0F;
   bool isMoving = false;
+  CharacterAnimationState animationState = CharacterAnimationState::Idle;
 };
 
 struct InputState {
@@ -318,8 +351,16 @@ void appendMesh(const aiMesh &assimpMesh, const glm::mat4 &transform,
       staticNormal = glm::normalize(normalMatrix * normal);
     }
 
-    mesh.vertices.push_back(Vertex{
-        sourcePosition, glm::vec3{transformedPosition}, normal, staticNormal});
+    glm::vec2 texCoord{0.0F, 0.0F};
+    if (assimpMesh.HasTextureCoords(0)) {
+      const aiVector3D &sourceTexCoord =
+          assimpMesh.mTextureCoords[0][vertexIndex];
+      texCoord = {sourceTexCoord.x, sourceTexCoord.y};
+    }
+
+    mesh.vertices.push_back(Vertex{sourcePosition,
+                                   glm::vec3{transformedPosition}, normal,
+                                   staticNormal, texCoord});
   }
 
   for (unsigned int boneIndex = 0; boneIndex < assimpMesh.mNumBones;
@@ -408,8 +449,10 @@ Model loadModel(const std::filesystem::path &path) {
 }
 
 AnimationClip loadAnimationClip(const std::filesystem::path &path,
-                                std::string fallbackName) {
+                                std::string fallbackName,
+                                bool retargetFirstFrameToBindPose = false) {
   AnimationClip clip;
+  clip.retargetFirstFrameToBindPose = retargetFirstFrameToBindPose;
   if (!std::filesystem::exists(path)) {
     std::cerr << "Animation file was not found: " << path << "\n";
     return clip;
@@ -471,6 +514,14 @@ AnimationClip loadAnimationClip(const std::filesystem::path &path,
   return clip;
 }
 
+float animationDurationSeconds(const AnimationClip &animation) {
+  if (!animation.isLoaded() || animation.ticksPerSecond <= 0.0) {
+    return 0.0F;
+  }
+
+  return static_cast<float>(animation.durationTicks / animation.ticksPerSecond);
+}
+
 std::size_t countMatchingAnimationChannels(const Model &model,
                                            const AnimationClip &animation) {
   std::size_t matchingChannels = 0;
@@ -499,6 +550,217 @@ void printAnimationMatchReport(const Model &model,
   }
 }
 
+std::vector<unsigned char> readBinaryFile(const std::filesystem::path &path) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return {};
+  }
+
+  return {std::istreambuf_iterator<char>{file},
+          std::istreambuf_iterator<char>{}};
+}
+
+std::uint32_t readBigEndianU32(const std::vector<unsigned char> &bytes,
+                               std::size_t offset) {
+  return (static_cast<std::uint32_t>(bytes[offset]) << 24U) |
+         (static_cast<std::uint32_t>(bytes[offset + 1]) << 16U) |
+         (static_cast<std::uint32_t>(bytes[offset + 2]) << 8U) |
+         static_cast<std::uint32_t>(bytes[offset + 3]);
+}
+
+unsigned char paethPredictor(unsigned char left, unsigned char up,
+                             unsigned char upperLeft) {
+  const int predictor = static_cast<int>(left) + static_cast<int>(up) -
+                        static_cast<int>(upperLeft);
+  const int leftDistance = std::abs(predictor - static_cast<int>(left));
+  const int upDistance = std::abs(predictor - static_cast<int>(up));
+  const int upperLeftDistance =
+      std::abs(predictor - static_cast<int>(upperLeft));
+
+  if (leftDistance <= upDistance && leftDistance <= upperLeftDistance) {
+    return left;
+  }
+  if (upDistance <= upperLeftDistance) {
+    return up;
+  }
+  return upperLeft;
+}
+
+PngImage loadPngImage(const std::filesystem::path &path) {
+  constexpr std::array<unsigned char, 8> PngSignature{137, 80, 78, 71,
+                                                      13,  10, 26, 10};
+  PngImage image;
+  const std::vector<unsigned char> fileBytes = readBinaryFile(path);
+  if (fileBytes.size() < PngSignature.size() ||
+      !std::equal(PngSignature.begin(), PngSignature.end(),
+                  fileBytes.begin())) {
+    std::cerr << "Texture is not a PNG file: " << path << "\n";
+    return image;
+  }
+
+  int sourceChannels = 0;
+  std::vector<unsigned char> compressedPixels;
+  std::size_t offset = PngSignature.size();
+  while (offset + 12 <= fileBytes.size()) {
+    const std::uint32_t chunkLength = readBigEndianU32(fileBytes, offset);
+    offset += 4;
+    const std::string chunkType{
+        fileBytes.begin() + static_cast<std::ptrdiff_t>(offset),
+        fileBytes.begin() + static_cast<std::ptrdiff_t>(offset + 4)};
+    offset += 4;
+
+    if (offset + chunkLength + 4 > fileBytes.size()) {
+      std::cerr << "PNG chunk is truncated in texture: " << path << "\n";
+      return {};
+    }
+
+    if (chunkType == "IHDR") {
+      image.width = static_cast<int>(readBigEndianU32(fileBytes, offset));
+      image.height = static_cast<int>(readBigEndianU32(fileBytes, offset + 4));
+      const unsigned char bitDepth = fileBytes[offset + 8];
+      const unsigned char colorType = fileBytes[offset + 9];
+      const unsigned char compression = fileBytes[offset + 10];
+      const unsigned char filter = fileBytes[offset + 11];
+      const unsigned char interlace = fileBytes[offset + 12];
+
+      if (bitDepth != 8 || compression != 0 || filter != 0 || interlace != 0 ||
+          (colorType != 2 && colorType != 6)) {
+        std::cerr << "Unsupported PNG texture format: " << path
+                  << " (expected non-interlaced 8-bit RGB/RGBA).\n";
+        return {};
+      }
+      sourceChannels = colorType == 6 ? 4 : 3;
+    } else if (chunkType == "IDAT") {
+      compressedPixels.insert(
+          compressedPixels.end(),
+          fileBytes.begin() + static_cast<std::ptrdiff_t>(offset),
+          fileBytes.begin() +
+              static_cast<std::ptrdiff_t>(offset + chunkLength));
+    } else if (chunkType == "IEND") {
+      break;
+    }
+
+    offset += chunkLength + 4;
+  }
+
+  if (image.width <= 0 || image.height <= 0 || sourceChannels == 0 ||
+      compressedPixels.empty()) {
+    std::cerr << "PNG texture is missing image data: " << path << "\n";
+    return {};
+  }
+
+  const std::size_t rowBytes =
+      static_cast<std::size_t>(image.width) * sourceChannels;
+  std::vector<unsigned char> filteredPixels(
+      (rowBytes + 1) * static_cast<std::size_t>(image.height));
+  uLongf filteredSize = static_cast<uLongf>(filteredPixels.size());
+  const int zlibResult =
+      uncompress(filteredPixels.data(), &filteredSize, compressedPixels.data(),
+                 static_cast<uLong>(compressedPixels.size()));
+  if (zlibResult != Z_OK || filteredSize != filteredPixels.size()) {
+    std::cerr << "Failed to decompress PNG texture: " << path << "\n";
+    return {};
+  }
+
+  std::vector<unsigned char> sourcePixels(
+      rowBytes * static_cast<std::size_t>(image.height));
+  for (int y = 0; y < image.height; ++y) {
+    const std::size_t filteredRowOffset =
+        static_cast<std::size_t>(y) * (rowBytes + 1);
+    const unsigned char filterType = filteredPixels[filteredRowOffset];
+    const unsigned char *filteredRow =
+        filteredPixels.data() + filteredRowOffset + 1;
+    unsigned char *decodedRow =
+        sourcePixels.data() + static_cast<std::size_t>(y) * rowBytes;
+    const unsigned char *previousRow =
+        y > 0 ? sourcePixels.data() + static_cast<std::size_t>(y - 1) * rowBytes
+              : nullptr;
+
+    for (std::size_t x = 0; x < rowBytes; ++x) {
+      const unsigned char raw = filteredRow[x];
+      const unsigned char left = x >= static_cast<std::size_t>(sourceChannels)
+                                     ? decodedRow[x - sourceChannels]
+                                     : 0;
+      const unsigned char up = previousRow != nullptr ? previousRow[x] : 0;
+      const unsigned char upperLeft =
+          previousRow != nullptr &&
+                  x >= static_cast<std::size_t>(sourceChannels)
+              ? previousRow[x - sourceChannels]
+              : 0;
+
+      switch (filterType) {
+      case 0:
+        decodedRow[x] = raw;
+        break;
+      case 1:
+        decodedRow[x] = static_cast<unsigned char>(raw + left);
+        break;
+      case 2:
+        decodedRow[x] = static_cast<unsigned char>(raw + up);
+        break;
+      case 3:
+        decodedRow[x] = static_cast<unsigned char>(
+            raw + ((static_cast<int>(left) + static_cast<int>(up)) / 2));
+        break;
+      case 4:
+        decodedRow[x] = static_cast<unsigned char>(
+            raw + paethPredictor(left, up, upperLeft));
+        break;
+      default:
+        std::cerr << "Unsupported PNG filter in texture: " << path << "\n";
+        return {};
+      }
+    }
+  }
+
+  image.pixels.resize(static_cast<std::size_t>(image.width) * image.height * 4);
+  for (int y = 0; y < image.height; ++y) {
+    const int flippedY = image.height - 1 - y;
+    for (int x = 0; x < image.width; ++x) {
+      const std::size_t sourceOffset =
+          (static_cast<std::size_t>(y) * image.width + x) * sourceChannels;
+      const std::size_t targetOffset =
+          (static_cast<std::size_t>(flippedY) * image.width + x) * 4;
+      image.pixels[targetOffset] = sourcePixels[sourceOffset];
+      image.pixels[targetOffset + 1] = sourcePixels[sourceOffset + 1];
+      image.pixels[targetOffset + 2] = sourcePixels[sourceOffset + 2];
+      image.pixels[targetOffset + 3] =
+          sourceChannels == 4 ? sourcePixels[sourceOffset + 3] : 255;
+    }
+  }
+  return image;
+}
+
+Texture2D loadTexture2D(const std::filesystem::path &path) {
+  Texture2D texture;
+  if (!std::filesystem::exists(path)) {
+    std::cerr << "Texture file was not found: " << path << "\n";
+    return texture;
+  }
+
+  const PngImage image = loadPngImage(path);
+  if (!image.isLoaded()) {
+    return texture;
+  }
+
+  glGenTextures(1, &texture.id);
+  glBindTexture(GL_TEXTURE_2D, texture.id);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.width, image.height, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, image.pixels.data());
+  glBindTexture(GL_TEXTURE_2D, 0);
+
+  texture.width = image.width;
+  texture.height = image.height;
+  std::cout << "Loaded texture " << path << " (" << texture.width << "x"
+            << texture.height << ").\n";
+  return texture;
+}
+
 void errorCallback(int error, const char *description) {
   std::cerr << "GLFW error " << error << ": " << description << '\n';
 }
@@ -523,7 +785,51 @@ glm::vec3 screenDirectionToWorldDirection(float screenRight, float screenUp) {
   return worldScreenRight * screenRight + worldScreenUp * screenUp;
 }
 
-void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime) {
+void updateCharacterAnimationState(Character &character, bool wantsToMove,
+                                   float deltaTime,
+                                   const AnimationClip &idleToWalkAnimation) {
+  if (!wantsToMove) {
+    character.isMoving = false;
+    if (character.animationState != CharacterAnimationState::Idle) {
+      character.animationState = CharacterAnimationState::Idle;
+      character.animationTime = 0.0F;
+    } else {
+      character.animationTime += deltaTime;
+    }
+    return;
+  }
+
+  const bool startedMoving = !character.isMoving;
+  character.isMoving = true;
+  if (startedMoving ||
+      character.animationState == CharacterAnimationState::Idle) {
+    character.animationState = CharacterAnimationState::IdleToWalk;
+    character.animationTime = 0.0F;
+  }
+
+  if (character.animationState == CharacterAnimationState::IdleToWalk) {
+    const float transitionDuration =
+        animationDurationSeconds(idleToWalkAnimation);
+    if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
+      character.animationState = CharacterAnimationState::Walk;
+      character.animationTime = 0.0F;
+      return;
+    }
+
+    character.animationTime += deltaTime;
+    if (character.animationTime >= transitionDuration) {
+      character.animationState = CharacterAnimationState::Walk;
+      character.animationTime =
+          std::fmod(character.animationTime, transitionDuration);
+    }
+    return;
+  }
+
+  character.animationTime += deltaTime;
+}
+
+void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
+                     const AnimationClip &idleToWalkAnimation) {
   if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
     glfwSetWindowShouldClose(window, GLFW_TRUE);
   }
@@ -542,14 +848,16 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime) {
     movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
   }
 
-  input.character.isMoving = glm::length(movement) > 0.0F;
-  if (input.character.isMoving) {
+  const bool wantsToMove = glm::length(movement) > 0.0F;
+  if (wantsToMove) {
     const glm::vec3 direction = glm::normalize(movement);
     input.character.position += direction * CharacterMoveSpeed * deltaTime;
     input.character.facing = direction;
   }
-  input.character.animationTime += deltaTime;
 
+  updateCharacterAnimationState(input.character, wantsToMove,
+                                deltaTime * CharacterAnimationPlaybackSpeed,
+                                idleToWalkAnimation);
   input.camera.target = input.character.position;
 }
 
@@ -708,11 +1016,31 @@ glm::quat sampleQuaternionKeys(double animationTime,
       interpolationFactor(animationTime, currentKey.time, nextKey.time)));
 }
 
+double firstAnimationKeyTime(const AnimationChannel &channel) {
+  double firstTime = std::numeric_limits<double>::infinity();
+  if (!channel.positions.empty()) {
+    firstTime = std::min(firstTime, channel.positions.front().time);
+  }
+  if (!channel.rotations.empty()) {
+    firstTime = std::min(firstTime, channel.rotations.front().time);
+  }
+  if (!channel.scales.empty()) {
+    firstTime = std::min(firstTime, channel.scales.front().time);
+  }
+  return std::isfinite(firstTime) ? firstTime : 0.0;
+}
+
 struct TransformComponents {
   glm::vec3 position{0.0F, 0.0F, 0.0F};
   glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
   glm::vec3 scale{1.0F, 1.0F, 1.0F};
 };
+
+glm::mat4 composeTransform(const TransformComponents &transform) {
+  return glm::translate(glm::mat4{1.0F}, transform.position) *
+         glm::mat4_cast(transform.rotation) *
+         glm::scale(glm::mat4{1.0F}, transform.scale);
+}
 
 TransformComponents decomposeTransform(const glm::mat4 &transform) {
   TransformComponents result;
@@ -751,9 +1079,24 @@ glm::mat4 nodeTransformForAnimation(const SkeletonNode &node,
       animationTime, channel.rotations, bindTransform.rotation);
   const glm::vec3 scale =
       sampleVectorKeys(animationTime, channel.scales, bindTransform.scale);
+  const glm::mat4 sampledTransform =
+      composeTransform(TransformComponents{position, rotation, scale});
 
-  return glm::translate(glm::mat4{1.0F}, position) * glm::mat4_cast(rotation) *
-         glm::scale(glm::mat4{1.0F}, scale);
+  if (!animation.retargetFirstFrameToBindPose) {
+    return sampledTransform;
+  }
+
+  const double referenceTime = firstAnimationKeyTime(channel);
+  const glm::vec3 referencePosition = sampleVectorKeys(
+      referenceTime, channel.positions, bindTransform.position);
+  const glm::quat referenceRotation = sampleQuaternionKeys(
+      referenceTime, channel.rotations, bindTransform.rotation);
+  const glm::vec3 referenceScale =
+      sampleVectorKeys(referenceTime, channel.scales, bindTransform.scale);
+  const glm::mat4 referenceTransform = composeTransform(TransformComponents{
+      referencePosition, referenceRotation, referenceScale});
+
+  return node.transform * glm::inverse(referenceTransform) * sampledTransform;
 }
 
 void computeBoneMatricesRecursive(const SkeletonNode &node,
@@ -826,11 +1169,23 @@ Vertex animatedVertex(const Vertex &vertex,
 }
 
 void drawModel(const Model &model, const AnimationClip &animation,
-               float animationTime) {
+               float animationTime, const Texture2D &texture) {
   const std::vector<glm::mat4> boneMatrices =
       computeBoneMatrices(model, animation, animationTime);
 
-  glColor3f(0.82F, 0.76F, 0.65F);
+  if (texture.isLoaded()) {
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.01F);
+    glBindTexture(GL_TEXTURE_2D, texture.id);
+    glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
+  } else {
+    glDisable(GL_TEXTURE_2D);
+    glColor3f(0.82F, 0.76F, 0.65F);
+  }
+
   glBegin(GL_TRIANGLES);
   for (const Mesh &mesh : model.meshes) {
     for (const unsigned int index : mesh.indices) {
@@ -843,22 +1198,49 @@ void drawModel(const Model &model, const AnimationClip &animation,
                          : mesh.vertices[index];
       glNormal3f(vertex.staticNormal.x, vertex.staticNormal.y,
                  vertex.staticNormal.z);
+      glTexCoord2f(vertex.texCoord.x, vertex.texCoord.y);
       glVertex3f(vertex.staticPosition.x, vertex.staticPosition.y,
                  vertex.staticPosition.z);
     }
   }
   glEnd();
+  if (texture.isLoaded()) {
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_TEXTURE_2D);
+  }
 }
 
 void configureOpenGl() {
   glEnable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
+  glDisable(GL_BLEND);
+  glDisable(GL_ALPHA_TEST);
   glClearColor(0.48F, 0.72F, 1.0F, 1.0F);
 }
 
+const AnimationClip &
+activeAnimationForCharacter(const Character &character,
+                            const AnimationClip &idleAnimation,
+                            const AnimationClip &idleToWalkAnimation,
+                            const AnimationClip &walkAnimation) {
+  switch (character.animationState) {
+  case CharacterAnimationState::Idle:
+    return idleAnimation;
+  case CharacterAnimationState::IdleToWalk:
+    return idleToWalkAnimation.isLoaded() ? idleToWalkAnimation : walkAnimation;
+  case CharacterAnimationState::Walk:
+    return walkAnimation;
+  }
+
+  return idleAnimation;
+}
+
 void renderScene(const Camera &camera, const Character &character,
-                 const Model &bodyModel, const AnimationClip &activeAnimation,
-                 int framebufferWidth, int framebufferHeight) {
+                 const Model &bodyModel, const Texture2D &bodyTexture,
+                 const AnimationClip &activeAnimation, int framebufferWidth,
+                 int framebufferHeight) {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   const float aspectRatio = framebufferHeight > 0
@@ -879,7 +1261,7 @@ void renderScene(const Camera &camera, const Character &character,
   glRotatef(rotationDegreesForFacing(character.facing), 0.0F, 1.0F, 0.0F);
   if (bodyModel.isLoaded()) {
     glScalef(0.01F, 0.01F, 0.01F);
-    drawModel(bodyModel, activeAnimation, character.animationTime);
+    drawModel(bodyModel, activeAnimation, character.animationTime, bodyTexture);
   } else {
     drawCube();
   }
@@ -925,11 +1307,15 @@ int main() {
   glfwSetScrollCallback(window, scrollCallback);
 
   const Model bodyModel = loadModel(BodyModelPath);
+  const Texture2D bodyTexture = loadTexture2D(BodyTexturePath);
   const AnimationClip idleAnimation =
       loadAnimationClip(IdleAnimationPath, "Bob_Idle");
+  const AnimationClip idleToWalkAnimation =
+      loadAnimationClip(IdleToWalkAnimationPath, "Bob_IdleToWalk", true);
   const AnimationClip walkAnimation =
-      loadAnimationClip(WalkAnimationPath, "Bob_Walk");
+      loadAnimationClip(WalkAnimationPath, "Bob_Walk", true);
   printAnimationMatchReport(bodyModel, idleAnimation);
+  printAnimationMatchReport(bodyModel, idleToWalkAnimation);
   printAnimationMatchReport(bodyModel, walkAnimation);
   configureOpenGl();
 
@@ -939,15 +1325,15 @@ int main() {
     const float deltaTime = currentTime - previousTime;
     previousTime = currentTime;
 
-    processKeyboard(window, input, deltaTime);
+    processKeyboard(window, input, deltaTime, idleToWalkAnimation);
 
     int framebufferWidth = 0;
     int framebufferHeight = 0;
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
-    const AnimationClip &activeAnimation =
-        input.character.isMoving ? walkAnimation : idleAnimation;
-    renderScene(input.camera, input.character, bodyModel, activeAnimation,
-                framebufferWidth, framebufferHeight);
+    const AnimationClip &activeAnimation = activeAnimationForCharacter(
+        input.character, idleAnimation, idleToWalkAnimation, walkAnimation);
+    renderScene(input.camera, input.character, bodyModel, bodyTexture,
+                activeAnimation, framebufferWidth, framebufferHeight);
 
     glfwSwapBuffers(window);
     glfwPollEvents();
