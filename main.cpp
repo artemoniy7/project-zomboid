@@ -44,9 +44,9 @@ constexpr int MaxVertexBones = 4;
 constexpr const char *BodyModelPath = "media/models/Bob.fbx";
 constexpr const char *IdleAnimationPath = "media/anim_x/bob/Bob_Idle.fbx";
 constexpr const char *IdleToWalkAnimationPath =
-    "media/animations/Bob_IdleToWalk.fbx";
+    "media/anim_x/bob/Bob_IdleToWalk.fbx";
 constexpr const char *WalkToStopAnimationPath =
-    "media/animations/Bob_WalkToStop.fbx";
+    "media/anim_x/bob/Bob_WalkToStop.fbx";
 constexpr const char *WalkAnimationPath = "media/anim_x/bob/Bob_Walk.fbx";
 constexpr const char *BodyTexturePath = "media/textures/Body MaleBody01.png";
 
