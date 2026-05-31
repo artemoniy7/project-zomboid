@@ -31,7 +31,8 @@
 namespace {
 constexpr int WindowWidth = 1280;
 constexpr int WindowHeight = 720;
-constexpr float CharacterMoveSpeed = 4.0F;
+constexpr float CharacterMoveSpeed = 3.2F;
+constexpr float CharacterAnimationPlaybackSpeed = 0.85F;
 constexpr float ZoomSpeed = 1.25F;
 constexpr float MinCameraDistance = 4.0F;
 constexpr float MaxCameraDistance = 40.0F;
@@ -854,7 +855,8 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     input.character.facing = direction;
   }
 
-  updateCharacterAnimationState(input.character, wantsToMove, deltaTime,
+  updateCharacterAnimationState(input.character, wantsToMove,
+                                deltaTime * CharacterAnimationPlaybackSpeed,
                                 idleToWalkAnimation);
   input.camera.target = input.character.position;
 }

@@ -24,6 +24,10 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 | Mouse wheel | Zoom camera in / out |
 | `Esc` | Close the window |
 
+## Tuning movement and animation speed
+
+Movement speed is controlled by `CharacterMoveSpeed` near the top of `main.cpp`. Animation playback speed is controlled separately by `CharacterAnimationPlaybackSpeed`: use values below `1.0F` to slow animation down or above `1.0F` to speed it up.
+
 ## Build
 
 Install development packages for GLFW, GLM, OpenGL, and Assimp, then run:
