@@ -11,7 +11,8 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 - Loads `media/models/Bob.fbx` through Assimp and draws it in the world.
 - Camera follows the character model instead of panning independently.
 - WASD moves the character like Project Zomboid: up/down/left/right on screen across diagonal world-tile directions.
-- Loads `media/anim_x/bob/Bob_Idle.fbx` and `media/anim_x/bob/Bob_Walk.fbx`, switches between idle/walk by movement state, and applies skeletal CPU skinning to the body mesh.
+- Loads `media/anim_x/bob/Bob_Idle.fbx`, `media/animations/Bob_IdleToWalk.fbx`, and `media/anim_x/bob/Bob_Walk.fbx`, plays the transition when movement starts, and applies skeletal CPU skinning to the body mesh.
+- Applies `media/textures/Body MaleBody01.png` to the player model when the PNG and model UVs are available.
 - Falls back to a basic colored cube when the model file is missing.
 
 ## Controls
@@ -73,8 +74,12 @@ media/
     bob/
       Bob_Idle.fbx
       Bob_Walk.fbx
+  animations/
+    Bob_IdleToWalk.fbx
+  textures/
+    Body MaleBody01.png
 ```
 
-The engine loads all three FBX files at startup with Assimp, prints how many model meshes, bones, and animation channels were found, renders the body mesh, and picks `Bob_Idle` while standing or `Bob_Walk` while WASD movement is active.
+The engine loads all player FBX files at startup with Assimp, prints how many model meshes, bones, and animation channels were found, renders the body mesh, applies `Body MaleBody01.png` through the model UVs when present, and picks `Bob_Idle` while standing. When WASD movement starts it plays `Bob_IdleToWalk` once, then loops `Bob_Walk` while movement stays active.
 
-Animation now uses a first-pass skeletal CPU skinning path: `Bob.fbx` provides the skeleton, inverse bind matrices, and vertex bone weights; `Bob_Idle.fbx` and `Bob_Walk.fbx` provide animation channels; the engine matches channels to bones by normalized Blender-style names such as `Armature.008` -> `Armature` and namespace/action-style names such as `Armature|Bip01_Pelvis` -> `Bip01_Pelvis`, samples position/rotation/scale keys each frame, builds final bone matrices, and skins vertices before drawing them. At startup it prints how many animation channels match model bones, which helps diagnose exported clips like `Bob_Walk.fbx`. This is intentionally simple and should later move to VBO/VAO rendering with GPU skinning.
+Animation now uses a first-pass skeletal CPU skinning path: `Bob.fbx` provides the skeleton, inverse bind matrices, and vertex bone weights; `Bob_Idle.fbx`, `Bob_IdleToWalk.fbx`, and `Bob_Walk.fbx` provide animation channels; the engine matches channels to bones by normalized Blender-style names such as `Armature.008` -> `Armature` and namespace/action-style names such as `Armature|Bip01_Pelvis` -> `Bip01_Pelvis`, samples position/rotation/scale keys each frame, builds final bone matrices, and skins vertices before drawing them. At startup it prints how many animation channels match model bones, which helps diagnose exported clips like `Bob_Walk.fbx`. This is intentionally simple and should later move to VBO/VAO rendering with GPU skinning.
