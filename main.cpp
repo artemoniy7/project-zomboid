@@ -34,7 +34,7 @@ constexpr float FieldOfView = 45.0F;
 constexpr float NearPlane = 0.1F;
 constexpr float FarPlane = 200.0F;
 constexpr int MaxVertexBones = 4;
-constexpr const char *BodyModelPath = "media/models/Bod.fbx";
+constexpr const char *BodyModelPath = "media/models/Bob.fbx";
 constexpr const char *IdleAnimationPath = "media/anim_x/bob/Bob_Idle.fbx";
 constexpr const char *WalkAnimationPath = "media/anim_x/bob/Bob_Walk.fbx";
 
@@ -135,7 +135,7 @@ struct Camera {
 
 struct Character {
   glm::vec3 position{0.0F, 0.0F, 0.0F};
-  glm::vec3 facing{0.0F, 0.0F, -1.0F};
+  glm::vec3 facing{0.0F, 0.0F, 1.0F};
   float animationTime = 0.0F;
   bool isMoving = false;
 };
@@ -554,7 +554,7 @@ void drawCube() {
 }
 
 float rotationDegreesForFacing(const glm::vec3 &facing) {
-  return glm::degrees(std::atan2(facing.x, facing.z));
+  return glm::degrees(std::atan2(-facing.x, -facing.z));
 }
 
 std::size_t keyIndexBefore(double animationTime,
