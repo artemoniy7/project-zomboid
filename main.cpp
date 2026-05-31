@@ -49,7 +49,7 @@ constexpr const char *IdleToWalkAnimationPath =
 constexpr const char *WalkToStopAnimationPath =
     "media/anim_x/bob/Bob_WalkToStop.fbx";
 constexpr const char *WalkAnimationPath = "media/anim_x/bob/Bob_Walk.fbx";
-constexpr const char *BodyTexturePath = "media/textures/Body MaleBody01.png";
+constexpr const char *BodyTexturePath = "media/textures/Body/MaleBody01.png";
 
 struct Vertex {
   glm::vec3 position{};
@@ -886,80 +886,48 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
 }
 
 void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
-                     const AnimationClip &idleToWalkAnimation,
-                     const AnimationClip &walkToStopAnimation) {
-  if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-    glfwSetWindowShouldClose(window, GLFW_TRUE);
-  }
+    const AnimationClip &idleToWalkAnimation,
+    const AnimationClip &walkToStopAnimation) {
+if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+glfwSetWindowShouldClose(window, GLFW_TRUE);
+}
 
-  glm::vec3 movement{0.0F, 0.0F, 0.0F};
-  if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-    movement += screenDirectionToWorldDirection(0.0F, 1.0F);
-  }
-  if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-    movement += screenDirectionToWorldDirection(0.0F, -1.0F);
-  }
-  if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-    movement += screenDirectionToWorldDirection(1.0F, 0.0F);
-  }
-  if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-    movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
-  }
+glm::vec3 movement{0.0F, 0.0F, 0.0F};
+if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+movement += screenDirectionToWorldDirection(0.0F, 1.0F);
+}
+if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+movement += screenDirectionToWorldDirection(0.0F, -1.0F);
+}
+if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+movement += screenDirectionToWorldDirection(1.0F, 0.0F);
+}
+if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
+}
 
-  const bool wantsToMove = glm::length(movement) > 0.0F;
-  if (wantsToMove) {
-    const glm::vec3 direction = glm::normalize(movement);
-    input.character.position += direction * CharacterMoveSpeed * deltaTime;
-    input.character.facing = direction;
-  }
+const bool wantsToMove = glm::length(movement) > 0.0F;
+if (wantsToMove) {
+const glm::vec3 direction = glm::normalize(movement);
+input.character.position += direction * CharacterMoveSpeed * deltaTime;
+input.character.facing = direction;
+}
 
-  updateCharacterAnimationState(
-      input.character, wantsToMove,
-      deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
-      idleToWalkAnimation, walkToStopAnimation);
+updateCharacterAnimationState(
+input.character, wantsToMove,
+deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
+idleToWalkAnimation, walkToStopAnimation);
 
-  if (!wantsToMove) {
-    const float coastScale =
-        walkToStopCoastScale(input.character, walkToStopAnimation);
-    if (coastScale > 0.0F) {
-      input.character.position += input.character.facing * CharacterMoveSpeed *
-                                  coastScale * deltaTime;
-    }
-  }
+if (!wantsToMove) {
+const float coastScale =
+walkToStopCoastScale(input.character, walkToStopAnimation);
+if (coastScale > 0.0F) {
+input.character.position += input.character.facing * CharacterMoveSpeed *
+                 coastScale * deltaTime;
+}
+}
 
-  const bool isTransitioning =
-      (wantsToMove &&
-       input.character.animationState != CharacterAnimationState::Walk) ||
-      (!wantsToMove &&
-       input.character.animationState != CharacterAnimationState::Idle);
-  const float animationPlaybackSpeed =
-      isTransitioning ? CharacterTransitionAnimationPlaybackSpeed
-                      : CharacterAnimationPlaybackSpeed;
-  updateCharacterAnimationState(input.character, wantsToMove,
-                                deltaTime * animationPlaybackSpeed,
-                                idleToWalkAnimation, walkToStopAnimation);
-
-  if (!wantsToMove) {
-    const float coastScale =
-        walkToStopCoastScale(input.character, walkToStopAnimation);
-    if (coastScale > 0.0F) {
-      input.character.position += input.character.facing * CharacterMoveSpeed *
-                                  coastScale * deltaTime;
-    }
-  }
-
-  const bool isTransitioning =
-      (wantsToMove &&
-       input.character.animationState != CharacterAnimationState::Walk) ||
-      (!wantsToMove &&
-       input.character.animationState != CharacterAnimationState::Idle);
-  const float animationPlaybackSpeed =
-      isTransitioning ? CharacterTransitionAnimationPlaybackSpeed
-                      : CharacterAnimationPlaybackSpeed;
-  updateCharacterAnimationState(input.character, wantsToMove,
-                                deltaTime * animationPlaybackSpeed,
-                                idleToWalkAnimation, walkToStopAnimation);
-  input.camera.target = input.character.position;
+input.camera.target = input.character.position;
 }
 
 void loadMatrix(GLenum matrixMode, const glm::mat4 &matrix) {
