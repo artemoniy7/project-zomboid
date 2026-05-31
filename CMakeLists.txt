@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(OpenGL REQUIRED)
+find_package(ZLIB REQUIRED)
 find_package(glfw3 CONFIG QUIET)
 find_package(glm CONFIG QUIET)
 find_package(assimp CONFIG QUIET)
@@ -48,4 +49,4 @@ else()
     message(FATAL_ERROR "Assimp was not found. Install Assimp development files to load FBX models.")
 endif()
 
-target_link_libraries(pz_engine PRIVATE OpenGL::GL)
+target_link_libraries(pz_engine PRIVATE OpenGL::GL ZLIB::ZLIB)
