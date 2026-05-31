@@ -1,6 +1,7 @@
 #include <GLFW/glfw3.h>
 
 #include <assimp/Importer.hpp>
+#include <assimp/config.h>
 #include <assimp/matrix4x4.h>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
@@ -137,7 +138,8 @@ struct Camera {
 struct Character {
   glm::vec3 position{0.0F, 0.0F, 0.0F};
   glm::vec3 facing{0.0F, 0.0F, 1.0F};
-  float animationTime = 0.0F;
+  float idleAnimationTime = 0.0F;
+  float walkAnimationTime = 0.0F;
   bool isMoving = false;
 };
 
@@ -383,6 +385,7 @@ Model loadModel(const std::filesystem::path &path) {
   }
 
   Assimp::Importer importer;
+  importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
   const aiScene *scene = importer.ReadFile(
       path.string(), aiProcess_Triangulate | aiProcess_JoinIdenticalVertices |
                          aiProcess_GenSmoothNormals |
@@ -416,6 +419,7 @@ AnimationClip loadAnimationClip(const std::filesystem::path &path,
   }
 
   Assimp::Importer importer;
+  importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
   const aiScene *scene = importer.ReadFile(path.string(), 0);
   if (scene == nullptr || scene->mNumAnimations == 0) {
     std::cerr << "Failed to load animation " << path << ": "
@@ -542,13 +546,27 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime) {
     movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
   }
 
+  const bool wasMoving = input.character.isMoving;
   input.character.isMoving = glm::length(movement) > 0.0F;
   if (input.character.isMoving) {
     const glm::vec3 direction = glm::normalize(movement);
     input.character.position += direction * CharacterMoveSpeed * deltaTime;
     input.character.facing = direction;
   }
-  input.character.animationTime += deltaTime;
+
+  if (input.character.isMoving != wasMoving) {
+    if (input.character.isMoving) {
+      input.character.walkAnimationTime = 0.0F;
+    } else {
+      input.character.idleAnimationTime = 0.0F;
+    }
+  }
+
+  if (input.character.isMoving) {
+    input.character.walkAnimationTime += deltaTime;
+  } else {
+    input.character.idleAnimationTime += deltaTime;
+  }
 
   input.camera.target = input.character.position;
 }
@@ -858,7 +876,8 @@ void configureOpenGl() {
 
 void renderScene(const Camera &camera, const Character &character,
                  const Model &bodyModel, const AnimationClip &activeAnimation,
-                 int framebufferWidth, int framebufferHeight) {
+                 float activeAnimationTime, int framebufferWidth,
+                 int framebufferHeight) {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   const float aspectRatio = framebufferHeight > 0
@@ -879,7 +898,7 @@ void renderScene(const Camera &camera, const Character &character,
   glRotatef(rotationDegreesForFacing(character.facing), 0.0F, 1.0F, 0.0F);
   if (bodyModel.isLoaded()) {
     glScalef(0.01F, 0.01F, 0.01F);
-    drawModel(bodyModel, activeAnimation, character.animationTime);
+    drawModel(bodyModel, activeAnimation, activeAnimationTime);
   } else {
     drawCube();
   }
@@ -946,8 +965,11 @@ int main() {
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
     const AnimationClip &activeAnimation =
         input.character.isMoving ? walkAnimation : idleAnimation;
+    const float activeAnimationTime = input.character.isMoving
+                                          ? input.character.walkAnimationTime
+                                          : input.character.idleAnimationTime;
     renderScene(input.camera, input.character, bodyModel, activeAnimation,
-                framebufferWidth, framebufferHeight);
+                activeAnimationTime, framebufferWidth, framebufferHeight);
 
     glfwSwapBuffers(window);
     glfwPollEvents();
