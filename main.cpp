@@ -101,6 +101,7 @@ struct AnimationClip {
   double ticksPerSecond = 24.0;
   std::vector<AnimationChannel> channels;
   std::unordered_map<std::string, std::size_t> channelIndexByNodeName;
+  std::unordered_map<std::string, glm::mat4> bindTransformByNodeName;
 
   [[nodiscard]] bool isLoaded() const {
     return !channels.empty() && durationTicks > 0.0;
@@ -249,6 +250,17 @@ SkeletonNode buildSkeletonNode(const aiNode &node) {
     result.children.push_back(buildSkeletonNode(*node.mChildren[childIndex]));
   }
   return result;
+}
+
+void collectBindTransforms(
+    const aiNode &node,
+    std::unordered_map<std::string, glm::mat4> &bindTransforms) {
+  bindTransforms[normalizeAssimpName(node.mName.C_Str())] =
+      toGlm(node.mTransformation);
+  for (unsigned int childIndex = 0; childIndex < node.mNumChildren;
+       ++childIndex) {
+    collectBindTransforms(*node.mChildren[childIndex], bindTransforms);
+  }
 }
 
 int findOrCreateBone(Model &model, const aiBone &assimpBone) {
@@ -422,6 +434,8 @@ AnimationClip loadAnimationClip(const std::filesystem::path &path,
               << importer.GetErrorString() << "\n";
     return clip;
   }
+
+  collectBindTransforms(*scene->mRootNode, clip.bindTransformByNodeName);
 
   const aiAnimation &animation = chooseAnimation(*scene, fallbackName);
   clip.name = animation.mName.C_Str();
@@ -743,17 +757,32 @@ glm::mat4 nodeTransformForAnimation(const SkeletonNode &node,
     return node.transform;
   }
 
+  const auto animationBindIterator =
+      animation.bindTransformByNodeName.find(node.name);
+  const glm::mat4 animationBindTransform =
+      animationBindIterator != animation.bindTransformByNodeName.end()
+          ? animationBindIterator->second
+          : node.transform;
+
   const AnimationChannel &channel = animation.channels[channelIterator->second];
-  const TransformComponents bindTransform = decomposeTransform(node.transform);
+  const TransformComponents bindTransform =
+      decomposeTransform(animationBindTransform);
   const glm::vec3 position = sampleVectorKeys(animationTime, channel.positions,
                                               bindTransform.position);
   const glm::quat rotation = sampleQuaternionKeys(
       animationTime, channel.rotations, bindTransform.rotation);
   const glm::vec3 scale =
       sampleVectorKeys(animationTime, channel.scales, bindTransform.scale);
+  const glm::mat4 sampledAnimationTransform =
+      glm::translate(glm::mat4{1.0F}, position) * glm::mat4_cast(rotation) *
+      glm::scale(glm::mat4{1.0F}, scale);
 
-  return glm::translate(glm::mat4{1.0F}, position) * glm::mat4_cast(rotation) *
-         glm::scale(glm::mat4{1.0F}, scale);
+  if (animationBindIterator == animation.bindTransformByNodeName.end()) {
+    return sampledAnimationTransform;
+  }
+
+  return node.transform * glm::inverse(animationBindTransform) *
+         sampledAnimationTransform;
 }
 
 void computeBoneMatricesRecursive(const SkeletonNode &node,
