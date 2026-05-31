@@ -1111,8 +1111,12 @@ void drawModel(const Model &model, const AnimationClip &animation,
 
   if (texture.isLoaded()) {
     glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.01F);
     glBindTexture(GL_TEXTURE_2D, texture.id);
-    glColor3f(1.0F, 1.0F, 1.0F);
+    glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
   } else {
     glDisable(GL_TEXTURE_2D);
     glColor3f(0.82F, 0.76F, 0.65F);
@@ -1138,6 +1142,8 @@ void drawModel(const Model &model, const AnimationClip &animation,
   glEnd();
   if (texture.isLoaded()) {
     glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_BLEND);
     glDisable(GL_TEXTURE_2D);
   }
 }
@@ -1145,6 +1151,8 @@ void drawModel(const Model &model, const AnimationClip &animation,
 void configureOpenGl() {
   glEnable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
+  glDisable(GL_BLEND);
+  glDisable(GL_ALPHA_TEST);
   glClearColor(0.48F, 0.72F, 1.0F, 1.0F);
 }
 
