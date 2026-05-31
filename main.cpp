@@ -34,6 +34,7 @@ constexpr int WindowHeight = 720;
 constexpr float CharacterMoveSpeed = 3.2F;
 constexpr float CharacterAnimationPlaybackSpeed = 0.85F;
 constexpr float CharacterTransitionAnimationPlaybackSpeed = 1.35F;
+constexpr float CharacterStopCoastSpeedScale = 0.55F;
 constexpr float ZoomSpeed = 1.25F;
 constexpr float MinCameraDistance = 4.0F;
 constexpr float MaxCameraDistance = 40.0F;
@@ -792,6 +793,25 @@ glm::vec3 screenDirectionToWorldDirection(float screenRight, float screenUp) {
   return worldScreenRight * screenRight + worldScreenUp * screenUp;
 }
 
+float walkToStopCoastScale(const Character &character,
+                           const AnimationClip &walkToStopAnimation) {
+  if (character.animationState != CharacterAnimationState::WalkToStop) {
+    return 0.0F;
+  }
+
+  const float transitionDuration =
+      animationDurationSeconds(walkToStopAnimation);
+  if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
+    return 0.0F;
+  }
+
+  const float transitionProgress = std::clamp(
+      character.animationTime / transitionDuration, 0.0F, 1.0F);
+  const float remainingTransition = 1.0F - transitionProgress;
+  return CharacterStopCoastSpeedScale * remainingTransition *
+         remainingTransition;
+}
+
 void updateCharacterAnimationState(Character &character, bool wantsToMove,
                                    float deltaTime,
                                    const AnimationClip &idleToWalkAnimation,
@@ -880,6 +900,27 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     const glm::vec3 direction = glm::normalize(movement);
     input.character.position += direction * CharacterMoveSpeed * deltaTime;
     input.character.facing = direction;
+  }
+
+  const bool isTransitioning =
+      (wantsToMove &&
+       input.character.animationState != CharacterAnimationState::Walk) ||
+      (!wantsToMove &&
+       input.character.animationState != CharacterAnimationState::Idle);
+  const float animationPlaybackSpeed =
+      isTransitioning ? CharacterTransitionAnimationPlaybackSpeed
+                      : CharacterAnimationPlaybackSpeed;
+  updateCharacterAnimationState(input.character, wantsToMove,
+                                deltaTime * animationPlaybackSpeed,
+                                idleToWalkAnimation, walkToStopAnimation);
+
+  if (!wantsToMove) {
+    const float coastScale =
+        walkToStopCoastScale(input.character, walkToStopAnimation);
+    if (coastScale > 0.0F) {
+      input.character.position += input.character.facing * CharacterMoveSpeed *
+                                  coastScale * deltaTime;
+    }
   }
 
   const bool isTransitioning =
