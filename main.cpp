@@ -1,7 +1,6 @@
 #include <GLFW/glfw3.h>
 
 #include <assimp/Importer.hpp>
-#include <assimp/config.h>
 #include <assimp/matrix4x4.h>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
@@ -102,7 +101,6 @@ struct AnimationClip {
   double ticksPerSecond = 24.0;
   std::vector<AnimationChannel> channels;
   std::unordered_map<std::string, std::size_t> channelIndexByNodeName;
-  std::unordered_map<std::string, glm::mat4> bindTransformByNodeName;
 
   [[nodiscard]] bool isLoaded() const {
     return !channels.empty() && durationTicks > 0.0;
@@ -139,8 +137,7 @@ struct Camera {
 struct Character {
   glm::vec3 position{0.0F, 0.0F, 0.0F};
   glm::vec3 facing{0.0F, 0.0F, 1.0F};
-  float idleAnimationTime = 0.0F;
-  float walkAnimationTime = 0.0F;
+  float animationTime = 0.0F;
   bool isMoving = false;
 };
 
@@ -252,17 +249,6 @@ SkeletonNode buildSkeletonNode(const aiNode &node) {
     result.children.push_back(buildSkeletonNode(*node.mChildren[childIndex]));
   }
   return result;
-}
-
-void collectBindTransforms(
-    const aiNode &node,
-    std::unordered_map<std::string, glm::mat4> &bindTransforms) {
-  bindTransforms[normalizeAssimpName(node.mName.C_Str())] =
-      toGlm(node.mTransformation);
-  for (unsigned int childIndex = 0; childIndex < node.mNumChildren;
-       ++childIndex) {
-    collectBindTransforms(*node.mChildren[childIndex], bindTransforms);
-  }
 }
 
 int findOrCreateBone(Model &model, const aiBone &assimpBone) {
@@ -397,7 +383,6 @@ Model loadModel(const std::filesystem::path &path) {
   }
 
   Assimp::Importer importer;
-  importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
   const aiScene *scene = importer.ReadFile(
       path.string(), aiProcess_Triangulate | aiProcess_JoinIdenticalVertices |
                          aiProcess_GenSmoothNormals |
@@ -431,15 +416,12 @@ AnimationClip loadAnimationClip(const std::filesystem::path &path,
   }
 
   Assimp::Importer importer;
-  importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
   const aiScene *scene = importer.ReadFile(path.string(), 0);
   if (scene == nullptr || scene->mNumAnimations == 0) {
     std::cerr << "Failed to load animation " << path << ": "
               << importer.GetErrorString() << "\n";
     return clip;
   }
-
-  collectBindTransforms(*scene->mRootNode, clip.bindTransformByNodeName);
 
   const aiAnimation &animation = chooseAnimation(*scene, fallbackName);
   clip.name = animation.mName.C_Str();
@@ -560,27 +542,13 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime) {
     movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
   }
 
-  const bool wasMoving = input.character.isMoving;
   input.character.isMoving = glm::length(movement) > 0.0F;
   if (input.character.isMoving) {
     const glm::vec3 direction = glm::normalize(movement);
     input.character.position += direction * CharacterMoveSpeed * deltaTime;
     input.character.facing = direction;
   }
-
-  if (input.character.isMoving != wasMoving) {
-    if (input.character.isMoving) {
-      input.character.walkAnimationTime = 0.0F;
-    } else {
-      input.character.idleAnimationTime = 0.0F;
-    }
-  }
-
-  if (input.character.isMoving) {
-    input.character.walkAnimationTime += deltaTime;
-  } else {
-    input.character.idleAnimationTime += deltaTime;
-  }
+  input.character.animationTime += deltaTime;
 
   input.camera.target = input.character.position;
 }
@@ -775,32 +743,17 @@ glm::mat4 nodeTransformForAnimation(const SkeletonNode &node,
     return node.transform;
   }
 
-  const auto animationBindIterator =
-      animation.bindTransformByNodeName.find(node.name);
-  const glm::mat4 animationBindTransform =
-      animationBindIterator != animation.bindTransformByNodeName.end()
-          ? animationBindIterator->second
-          : node.transform;
-
   const AnimationChannel &channel = animation.channels[channelIterator->second];
-  const TransformComponents bindTransform =
-      decomposeTransform(animationBindTransform);
+  const TransformComponents bindTransform = decomposeTransform(node.transform);
   const glm::vec3 position = sampleVectorKeys(animationTime, channel.positions,
                                               bindTransform.position);
   const glm::quat rotation = sampleQuaternionKeys(
       animationTime, channel.rotations, bindTransform.rotation);
   const glm::vec3 scale =
       sampleVectorKeys(animationTime, channel.scales, bindTransform.scale);
-  const glm::mat4 sampledAnimationTransform =
-      glm::translate(glm::mat4{1.0F}, position) * glm::mat4_cast(rotation) *
-      glm::scale(glm::mat4{1.0F}, scale);
 
-  if (animationBindIterator == animation.bindTransformByNodeName.end()) {
-    return sampledAnimationTransform;
-  }
-
-  return node.transform * glm::inverse(animationBindTransform) *
-         sampledAnimationTransform;
+  return glm::translate(glm::mat4{1.0F}, position) * glm::mat4_cast(rotation) *
+         glm::scale(glm::mat4{1.0F}, scale);
 }
 
 void computeBoneMatricesRecursive(const SkeletonNode &node,
@@ -905,8 +858,7 @@ void configureOpenGl() {
 
 void renderScene(const Camera &camera, const Character &character,
                  const Model &bodyModel, const AnimationClip &activeAnimation,
-                 float activeAnimationTime, int framebufferWidth,
-                 int framebufferHeight) {
+                 int framebufferWidth, int framebufferHeight) {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   const float aspectRatio = framebufferHeight > 0
@@ -927,7 +879,7 @@ void renderScene(const Camera &camera, const Character &character,
   glRotatef(rotationDegreesForFacing(character.facing), 0.0F, 1.0F, 0.0F);
   if (bodyModel.isLoaded()) {
     glScalef(0.01F, 0.01F, 0.01F);
-    drawModel(bodyModel, activeAnimation, activeAnimationTime);
+    drawModel(bodyModel, activeAnimation, character.animationTime);
   } else {
     drawCube();
   }
@@ -994,11 +946,8 @@ int main() {
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
     const AnimationClip &activeAnimation =
         input.character.isMoving ? walkAnimation : idleAnimation;
-    const float activeAnimationTime = input.character.isMoving
-                                          ? input.character.walkAnimationTime
-                                          : input.character.idleAnimationTime;
     renderScene(input.camera, input.character, bodyModel, activeAnimation,
-                activeAnimationTime, framebufferWidth, framebufferHeight);
+                framebufferWidth, framebufferHeight);
 
     glfwSwapBuffers(window);
     glfwPollEvents();
