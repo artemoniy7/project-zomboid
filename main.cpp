@@ -99,6 +99,7 @@ struct AnimationClip {
   std::string name;
   double durationTicks = 0.0;
   double ticksPerSecond = 24.0;
+  bool retargetFirstFrameToBindPose = false;
   std::vector<AnimationChannel> channels;
   std::unordered_map<std::string, std::size_t> channelIndexByNodeName;
 
@@ -408,8 +409,10 @@ Model loadModel(const std::filesystem::path &path) {
 }
 
 AnimationClip loadAnimationClip(const std::filesystem::path &path,
-                                std::string fallbackName) {
+                                std::string fallbackName,
+                                bool retargetFirstFrameToBindPose = false) {
   AnimationClip clip;
+  clip.retargetFirstFrameToBindPose = retargetFirstFrameToBindPose;
   if (!std::filesystem::exists(path)) {
     std::cerr << "Animation file was not found: " << path << "\n";
     return clip;
@@ -708,11 +711,31 @@ glm::quat sampleQuaternionKeys(double animationTime,
       interpolationFactor(animationTime, currentKey.time, nextKey.time)));
 }
 
+double firstAnimationKeyTime(const AnimationChannel &channel) {
+  double firstTime = std::numeric_limits<double>::infinity();
+  if (!channel.positions.empty()) {
+    firstTime = std::min(firstTime, channel.positions.front().time);
+  }
+  if (!channel.rotations.empty()) {
+    firstTime = std::min(firstTime, channel.rotations.front().time);
+  }
+  if (!channel.scales.empty()) {
+    firstTime = std::min(firstTime, channel.scales.front().time);
+  }
+  return std::isfinite(firstTime) ? firstTime : 0.0;
+}
+
 struct TransformComponents {
   glm::vec3 position{0.0F, 0.0F, 0.0F};
   glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
   glm::vec3 scale{1.0F, 1.0F, 1.0F};
 };
+
+glm::mat4 composeTransform(const TransformComponents &transform) {
+  return glm::translate(glm::mat4{1.0F}, transform.position) *
+         glm::mat4_cast(transform.rotation) *
+         glm::scale(glm::mat4{1.0F}, transform.scale);
+}
 
 TransformComponents decomposeTransform(const glm::mat4 &transform) {
   TransformComponents result;
@@ -751,9 +774,24 @@ glm::mat4 nodeTransformForAnimation(const SkeletonNode &node,
       animationTime, channel.rotations, bindTransform.rotation);
   const glm::vec3 scale =
       sampleVectorKeys(animationTime, channel.scales, bindTransform.scale);
+  const glm::mat4 sampledTransform =
+      composeTransform(TransformComponents{position, rotation, scale});
 
-  return glm::translate(glm::mat4{1.0F}, position) * glm::mat4_cast(rotation) *
-         glm::scale(glm::mat4{1.0F}, scale);
+  if (!animation.retargetFirstFrameToBindPose) {
+    return sampledTransform;
+  }
+
+  const double referenceTime = firstAnimationKeyTime(channel);
+  const glm::vec3 referencePosition = sampleVectorKeys(
+      referenceTime, channel.positions, bindTransform.position);
+  const glm::quat referenceRotation = sampleQuaternionKeys(
+      referenceTime, channel.rotations, bindTransform.rotation);
+  const glm::vec3 referenceScale =
+      sampleVectorKeys(referenceTime, channel.scales, bindTransform.scale);
+  const glm::mat4 referenceTransform = composeTransform(TransformComponents{
+      referencePosition, referenceRotation, referenceScale});
+
+  return node.transform * glm::inverse(referenceTransform) * sampledTransform;
 }
 
 void computeBoneMatricesRecursive(const SkeletonNode &node,
@@ -928,7 +966,7 @@ int main() {
   const AnimationClip idleAnimation =
       loadAnimationClip(IdleAnimationPath, "Bob_Idle");
   const AnimationClip walkAnimation =
-      loadAnimationClip(WalkAnimationPath, "Bob_Walk");
+      loadAnimationClip(WalkAnimationPath, "Bob_Walk", true);
   printAnimationMatchReport(bodyModel, idleAnimation);
   printAnimationMatchReport(bodyModel, walkAnimation);
   configureOpenGl();
