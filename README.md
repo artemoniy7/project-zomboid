@@ -11,7 +11,7 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 - Loads `media/models/Bod.fbx` through Assimp and draws it in the world.
 - Camera follows the character model instead of panning independently.
 - WASD moves the character like Project Zomboid: up/down/left/right on screen across diagonal world-tile directions.
-- Loads `media/anim_x/bob/Bob_Idle.fbx` and `media/anim_x/bob/Bob_Walk.fbx`, switches between idle/walk by movement state, and applies a small walk bob while moving when the walk clip is present.
+- Loads `media/anim_x/bob/Bob_Idle.fbx` and `media/anim_x/bob/Bob_Walk.fbx`, switches between idle/walk by movement state, and applies skeletal CPU skinning to the body mesh.
 - Falls back to a basic colored cube when the model file is missing.
 
 ## Controls
@@ -75,6 +75,6 @@ media/
       Bob_Walk.fbx
 ```
 
-The engine loads all three FBX files at startup with Assimp, prints how many model meshes and animation channels were found, renders the body mesh, and picks `Bob_Idle` while standing or `Bob_Walk` while WASD movement is active.
+The engine loads all three FBX files at startup with Assimp, prints how many model meshes, bones, and animation channels were found, renders the body mesh, and picks `Bob_Idle` while standing or `Bob_Walk` while WASD movement is active.
 
-The animation clips are currently loaded as metadata and used to drive the prototype animation state plus visible walk bob. To make the real skeletal FBX clips deform the model, the next engine step is to import a skeleton from `Bod.fbx`, import bone IDs/weights per vertex, match animation channels from `Bob_Idle.fbx` and `Bob_Walk.fbx` to bones by name, sample position/rotation/scale keys each frame, build final bone matrices, and skin vertices on the CPU or GPU.
+Animation now uses a first-pass skeletal CPU skinning path: `Bod.fbx` provides the skeleton, inverse bind matrices, and vertex bone weights; `Bob_Idle.fbx` and `Bob_Walk.fbx` provide animation channels; the engine matches channels to bones by normalized Blender-style names such as `Armature.008` -> `Armature`, samples position/rotation/scale keys each frame, builds final bone matrices, and skins vertices before drawing them. This is intentionally simple and should later move to VBO/VAO rendering with GPU skinning.
