@@ -29,8 +29,9 @@ constexpr float MaxCameraDistance = 40.0F;
 constexpr float FieldOfView = 45.0F;
 constexpr float NearPlane = 0.1F;
 constexpr float FarPlane = 200.0F;
-constexpr const char* ManModelPath = "media/man_model.fbx";
-constexpr const char* WalkAnimationPath = "media/Kate_Walk.X";
+constexpr const char* BodyModelPath = "media/models/Bod.fbx";
+constexpr const char* IdleAnimationPath = "media/anim_x/bob/Bob_Idle.fbx";
+constexpr const char* WalkAnimationPath = "media/anim_x/bob/Bob_Walk.fbx";
 
 struct Vertex {
     glm::vec3 position{};
@@ -195,31 +196,31 @@ Model loadModel(const std::filesystem::path& path) {
     return model;
 }
 
-AnimationClip loadAnimationClip(const std::filesystem::path& path) {
+AnimationClip loadAnimationClip(const std::filesystem::path& path, std::string fallbackName) {
     AnimationClip clip;
     if (!std::filesystem::exists(path)) {
-        std::cerr << "Walk animation file was not found: " << path << "\n";
+        std::cerr << "Animation file was not found: " << path << "\n";
         return clip;
     }
 
     Assimp::Importer importer;
     const aiScene* scene = importer.ReadFile(path.string(), 0);
     if (scene == nullptr || scene->mNumAnimations == 0) {
-        std::cerr << "Failed to load walk animation " << path << ": " << importer.GetErrorString() << "\n";
+        std::cerr << "Failed to load animation " << path << ": " << importer.GetErrorString() << "\n";
         return clip;
     }
 
     const aiAnimation& animation = *scene->mAnimations[0];
     clip.name = animation.mName.C_Str();
     if (clip.name.empty()) {
-        clip.name = path.stem().string();
+        clip.name = std::move(fallbackName);
     }
 
     clip.durationTicks = animation.mDuration;
     clip.ticksPerSecond = animation.mTicksPerSecond > 0.0 ? animation.mTicksPerSecond : 24.0;
     clip.channelCount = animation.mNumChannels;
 
-    std::cout << "Loaded walk animation " << path << " as '" << clip.name << "' with " << clip.channelCount
+    std::cout << "Loaded animation " << path << " as '" << clip.name << "' with " << clip.channelCount
               << " channel(s), " << clip.durationTicks << " tick(s), " << clip.ticksPerSecond << " tick(s)/second.\n";
     return clip;
 }
@@ -273,7 +274,7 @@ void processKeyboard(GLFWwindow* window, InputState& input, float deltaTime) {
         input.character.facing = direction;
         input.character.animationTime += deltaTime;
     } else {
-        input.character.animationTime = 0.0F;
+        input.character.animationTime += deltaTime;
     }
 
     input.camera.target = input.character.position;
@@ -333,8 +334,8 @@ float rotationDegreesForFacing(const glm::vec3& facing) {
     return glm::degrees(std::atan2(facing.x, facing.z));
 }
 
-float walkBobOffset(const Character& character, const AnimationClip& walkAnimation) {
-    if (!character.isMoving || !walkAnimation.isLoaded()) {
+float walkBobOffset(const Character& character, const AnimationClip& activeAnimation) {
+    if (!character.isMoving || !activeAnimation.isLoaded()) {
         return 0.0F;
     }
 
@@ -364,7 +365,7 @@ void configureOpenGl() {
     glClearColor(0.48F, 0.72F, 1.0F, 1.0F);
 }
 
-void renderScene(const Camera& camera, const Character& character, const Model& manModel, const AnimationClip& walkAnimation, int framebufferWidth, int framebufferHeight) {
+void renderScene(const Camera& camera, const Character& character, const Model& bodyModel, const AnimationClip& activeAnimation, int framebufferWidth, int framebufferHeight) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     const float aspectRatio = framebufferHeight > 0
@@ -378,11 +379,11 @@ void renderScene(const Camera& camera, const Character& character, const Model& 
     drawGroundGrid();
 
     glPushMatrix();
-    glTranslatef(character.position.x, character.position.y + walkBobOffset(character, walkAnimation), character.position.z);
+    glTranslatef(character.position.x, character.position.y + walkBobOffset(character, activeAnimation), character.position.z);
     glRotatef(rotationDegreesForFacing(character.facing), 0.0F, 1.0F, 0.0F);
-    if (manModel.isLoaded()) {
+    if (bodyModel.isLoaded()) {
         glScalef(0.01F, 0.01F, 0.01F);
-        drawModel(manModel);
+        drawModel(bodyModel);
     } else {
         drawCube();
     }
@@ -425,8 +426,9 @@ int main() {
     glfwSetWindowUserPointer(window, &input);
     glfwSetScrollCallback(window, scrollCallback);
 
-    const Model manModel = loadModel(ManModelPath);
-    const AnimationClip walkAnimation = loadAnimationClip(WalkAnimationPath);
+    const Model bodyModel = loadModel(BodyModelPath);
+    const AnimationClip idleAnimation = loadAnimationClip(IdleAnimationPath, "Bob_Idle");
+    const AnimationClip walkAnimation = loadAnimationClip(WalkAnimationPath, "Bob_Walk");
     configureOpenGl();
 
     float previousTime = static_cast<float>(glfwGetTime());
@@ -440,7 +442,8 @@ int main() {
         int framebufferWidth = 0;
         int framebufferHeight = 0;
         glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
-        renderScene(input.camera, input.character, manModel, walkAnimation, framebufferWidth, framebufferHeight);
+        const AnimationClip& activeAnimation = input.character.isMoving ? walkAnimation : idleAnimation;
+        renderScene(input.camera, input.character, bodyModel, activeAnimation, framebufferWidth, framebufferHeight);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
