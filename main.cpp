@@ -45,11 +45,11 @@ constexpr int MaxVertexBones = 4;
 constexpr const char *BodyModelPath = "media/models/Bob.fbx";
 constexpr const char *IdleAnimationPath = "media/anim_x/bob/Bob_Idle.fbx";
 constexpr const char *IdleToWalkAnimationPath =
-    "media/animations/Bob_IdleToWalk.fbx";
+    "media/anim_x/bob/Bob_IdleToWalk.fbx";
 constexpr const char *WalkToStopAnimationPath =
-    "media/animations/Bob_WalkToStop.fbx";
+    "media/anim_x/bob/Bob_WalkToStop.fbx";
 constexpr const char *WalkAnimationPath = "media/anim_x/bob/Bob_Walk.fbx";
-constexpr const char *BodyTexturePath = "media/textures/Body MaleBody01.png";
+constexpr const char *BodyTexturePath = "media/textures/Body/MaleBody01.png";
 
 struct Vertex {
   glm::vec3 position{};
@@ -892,18 +892,69 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     glfwSetWindowShouldClose(window, GLFW_TRUE);
   }
 
-  glm::vec3 movement{0.0F, 0.0F, 0.0F};
-  if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-    movement += screenDirectionToWorldDirection(0.0F, 1.0F);
+  const float transitionDuration =
+      animationDurationSeconds(walkToStopAnimation);
+  if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
+    return 0.0F;
   }
-  if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-    movement += screenDirectionToWorldDirection(0.0F, -1.0F);
+
+  const float transitionProgress = std::clamp(
+      character.animationTime / transitionDuration, 0.0F, 1.0F);
+  const float remainingTransition = 1.0F - transitionProgress;
+  return CharacterStopCoastSpeedScale * remainingTransition *
+         remainingTransition;
+}
+
+float characterAnimationPlaybackSpeed(const Character &character,
+                                      bool wantsToMove) {
+  const bool isTransitioning =
+      (wantsToMove &&
+       character.animationState != CharacterAnimationState::Walk) ||
+      (!wantsToMove &&
+       character.animationState != CharacterAnimationState::Idle);
+  return isTransitioning ? CharacterTransitionAnimationPlaybackSpeed
+                         : CharacterAnimationPlaybackSpeed;
+}
+
+void updateCharacterAnimationState(Character &character, bool wantsToMove,
+                                   float deltaTime,
+                                   const AnimationClip &idleToWalkAnimation,
+                                   const AnimationClip &walkToStopAnimation) {
+  if (!wantsToMove) {
+    character.isMoving = false;
+    if (character.animationState == CharacterAnimationState::Idle) {
+      character.animationTime += deltaTime;
+      return;
+    }
+
+    if (character.animationState != CharacterAnimationState::WalkToStop) {
+      character.animationState = CharacterAnimationState::WalkToStop;
+      character.animationTime = 0.0F;
+    }
+
+    const float transitionDuration =
+        animationDurationSeconds(walkToStopAnimation);
+    if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
+      character.animationState = CharacterAnimationState::Idle;
+      character.animationTime = 0.0F;
+      return;
+    }
+
+    character.animationTime += deltaTime;
+    if (character.animationTime >= transitionDuration) {
+      character.animationState = CharacterAnimationState::Idle;
+      character.animationTime = 0.0F;
+    }
+    return;
   }
-  if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-    movement += screenDirectionToWorldDirection(1.0F, 0.0F);
-  }
-  if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-    movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
+
+  const bool startedMoving = !character.isMoving;
+  character.isMoving = true;
+  if (startedMoving ||
+      character.animationState == CharacterAnimationState::Idle ||
+      character.animationState == CharacterAnimationState::WalkToStop) {
+    character.animationState = CharacterAnimationState::IdleToWalk;
+    character.animationTime = 0.0F;
   }
 
   const bool wantsToMove = glm::length(movement) > 0.0F;
@@ -927,7 +978,52 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     }
   }
 
-  input.camera.target = input.character.position;
+  character.animationTime += deltaTime;
+}
+
+void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
+    const AnimationClip &idleToWalkAnimation,
+    const AnimationClip &walkToStopAnimation) {
+if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+glfwSetWindowShouldClose(window, GLFW_TRUE);
+}
+
+glm::vec3 movement{0.0F, 0.0F, 0.0F};
+if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+movement += screenDirectionToWorldDirection(0.0F, 1.0F);
+}
+if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+movement += screenDirectionToWorldDirection(0.0F, -1.0F);
+}
+if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+movement += screenDirectionToWorldDirection(1.0F, 0.0F);
+}
+if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
+}
+
+const bool wantsToMove = glm::length(movement) > 0.0F;
+if (wantsToMove) {
+const glm::vec3 direction = glm::normalize(movement);
+input.character.position += direction * CharacterMoveSpeed * deltaTime;
+input.character.facing = direction;
+}
+
+updateCharacterAnimationState(
+input.character, wantsToMove,
+deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
+idleToWalkAnimation, walkToStopAnimation);
+
+if (!wantsToMove) {
+const float coastScale =
+walkToStopCoastScale(input.character, walkToStopAnimation);
+if (coastScale > 0.0F) {
+input.character.position += input.character.facing * CharacterMoveSpeed *
+                 coastScale * deltaTime;
+}
+}
+
+input.camera.target = input.character.position;
 }
 
 void loadMatrix(GLenum matrixMode, const glm::mat4 &matrix) {
