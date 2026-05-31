@@ -41,6 +41,8 @@ constexpr float FarPlane = 200.0F;
 constexpr int MaxVertexBones = 4;
 constexpr const char *BodyModelPath = "media/models/Bob.fbx";
 constexpr const char *IdleAnimationPath = "media/anim_x/bob/Bob_Idle.fbx";
+constexpr const char *IdleToWalkAnimationPath =
+    "media/animations/Bob_IdleToWalk.fbx";
 constexpr const char *WalkAnimationPath = "media/anim_x/bob/Bob_Walk.fbx";
 constexpr const char *BodyTexturePath = "media/textures/Body MaleBody01.png";
 
@@ -157,11 +159,18 @@ struct Camera {
   }
 };
 
+enum class CharacterAnimationState {
+  Idle,
+  IdleToWalk,
+  Walk,
+};
+
 struct Character {
   glm::vec3 position{0.0F, 0.0F, 0.0F};
   glm::vec3 facing{0.0F, 0.0F, 1.0F};
   float animationTime = 0.0F;
   bool isMoving = false;
+  CharacterAnimationState animationState = CharacterAnimationState::Idle;
 };
 
 struct InputState {
@@ -504,6 +513,14 @@ AnimationClip loadAnimationClip(const std::filesystem::path &path,
   return clip;
 }
 
+float animationDurationSeconds(const AnimationClip &animation) {
+  if (!animation.isLoaded() || animation.ticksPerSecond <= 0.0) {
+    return 0.0F;
+  }
+
+  return static_cast<float>(animation.durationTicks / animation.ticksPerSecond);
+}
+
 std::size_t countMatchingAnimationChannels(const Model &model,
                                            const AnimationClip &animation) {
   std::size_t matchingChannels = 0;
@@ -767,7 +784,51 @@ glm::vec3 screenDirectionToWorldDirection(float screenRight, float screenUp) {
   return worldScreenRight * screenRight + worldScreenUp * screenUp;
 }
 
-void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime) {
+void updateCharacterAnimationState(Character &character, bool wantsToMove,
+                                   float deltaTime,
+                                   const AnimationClip &idleToWalkAnimation) {
+  if (!wantsToMove) {
+    character.isMoving = false;
+    if (character.animationState != CharacterAnimationState::Idle) {
+      character.animationState = CharacterAnimationState::Idle;
+      character.animationTime = 0.0F;
+    } else {
+      character.animationTime += deltaTime;
+    }
+    return;
+  }
+
+  const bool startedMoving = !character.isMoving;
+  character.isMoving = true;
+  if (startedMoving ||
+      character.animationState == CharacterAnimationState::Idle) {
+    character.animationState = CharacterAnimationState::IdleToWalk;
+    character.animationTime = 0.0F;
+  }
+
+  if (character.animationState == CharacterAnimationState::IdleToWalk) {
+    const float transitionDuration =
+        animationDurationSeconds(idleToWalkAnimation);
+    if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
+      character.animationState = CharacterAnimationState::Walk;
+      character.animationTime = 0.0F;
+      return;
+    }
+
+    character.animationTime += deltaTime;
+    if (character.animationTime >= transitionDuration) {
+      character.animationState = CharacterAnimationState::Walk;
+      character.animationTime =
+          std::fmod(character.animationTime, transitionDuration);
+    }
+    return;
+  }
+
+  character.animationTime += deltaTime;
+}
+
+void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
+                     const AnimationClip &idleToWalkAnimation) {
   if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
     glfwSetWindowShouldClose(window, GLFW_TRUE);
   }
@@ -786,14 +847,15 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime) {
     movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
   }
 
-  input.character.isMoving = glm::length(movement) > 0.0F;
-  if (input.character.isMoving) {
+  const bool wantsToMove = glm::length(movement) > 0.0F;
+  if (wantsToMove) {
     const glm::vec3 direction = glm::normalize(movement);
     input.character.position += direction * CharacterMoveSpeed * deltaTime;
     input.character.facing = direction;
   }
-  input.character.animationTime += deltaTime;
 
+  updateCharacterAnimationState(input.character, wantsToMove, deltaTime,
+                                idleToWalkAnimation);
   input.camera.target = input.character.position;
 }
 
@@ -1156,6 +1218,23 @@ void configureOpenGl() {
   glClearColor(0.48F, 0.72F, 1.0F, 1.0F);
 }
 
+const AnimationClip &
+activeAnimationForCharacter(const Character &character,
+                            const AnimationClip &idleAnimation,
+                            const AnimationClip &idleToWalkAnimation,
+                            const AnimationClip &walkAnimation) {
+  switch (character.animationState) {
+  case CharacterAnimationState::Idle:
+    return idleAnimation;
+  case CharacterAnimationState::IdleToWalk:
+    return idleToWalkAnimation.isLoaded() ? idleToWalkAnimation : walkAnimation;
+  case CharacterAnimationState::Walk:
+    return walkAnimation;
+  }
+
+  return idleAnimation;
+}
+
 void renderScene(const Camera &camera, const Character &character,
                  const Model &bodyModel, const Texture2D &bodyTexture,
                  const AnimationClip &activeAnimation, int framebufferWidth,
@@ -1229,9 +1308,12 @@ int main() {
   const Texture2D bodyTexture = loadTexture2D(BodyTexturePath);
   const AnimationClip idleAnimation =
       loadAnimationClip(IdleAnimationPath, "Bob_Idle");
+  const AnimationClip idleToWalkAnimation =
+      loadAnimationClip(IdleToWalkAnimationPath, "Bob_IdleToWalk", true);
   const AnimationClip walkAnimation =
       loadAnimationClip(WalkAnimationPath, "Bob_Walk", true);
   printAnimationMatchReport(bodyModel, idleAnimation);
+  printAnimationMatchReport(bodyModel, idleToWalkAnimation);
   printAnimationMatchReport(bodyModel, walkAnimation);
   configureOpenGl();
 
@@ -1241,13 +1323,13 @@ int main() {
     const float deltaTime = currentTime - previousTime;
     previousTime = currentTime;
 
-    processKeyboard(window, input, deltaTime);
+    processKeyboard(window, input, deltaTime, idleToWalkAnimation);
 
     int framebufferWidth = 0;
     int framebufferHeight = 0;
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
-    const AnimationClip &activeAnimation =
-        input.character.isMoving ? walkAnimation : idleAnimation;
+    const AnimationClip &activeAnimation = activeAnimationForCharacter(
+        input.character, idleAnimation, idleToWalkAnimation, walkAnimation);
     renderScene(input.camera, input.character, bodyModel, bodyTexture,
                 activeAnimation, framebufferWidth, framebufferHeight);
 
