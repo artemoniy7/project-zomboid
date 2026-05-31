@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -20,7 +21,7 @@
 namespace {
 constexpr int WindowWidth = 1280;
 constexpr int WindowHeight = 720;
-constexpr float MovementSpeed = 8.0F;
+constexpr float CharacterMoveSpeed = 4.0F;
 constexpr float ZoomSpeed = 1.25F;
 constexpr float MinCameraDistance = 4.0F;
 constexpr float MaxCameraDistance = 40.0F;
@@ -74,8 +75,16 @@ struct Camera {
     }
 };
 
+struct Character {
+    glm::vec3 position{0.0F, 0.0F, 0.0F};
+    glm::vec3 facing{0.0F, 0.0F, -1.0F};
+    float animationTime = 0.0F;
+    bool isMoving = false;
+};
+
 struct InputState {
     Camera camera;
+    Character character;
 };
 
 glm::mat4 toGlm(const aiMatrix4x4& matrix) {
@@ -195,23 +204,31 @@ void processKeyboard(GLFWwindow* window, InputState& input, float deltaTime) {
         glfwSetWindowShouldClose(window, GLFW_TRUE);
     }
 
-    const float velocity = MovementSpeed * deltaTime;
-    const glm::vec3 forward = input.camera.forward();
-    const glm::vec3 flatForward = glm::normalize(glm::vec3{forward.x, 0.0F, forward.z});
-    const glm::vec3 right = input.camera.right();
-
+    glm::vec3 movement{0.0F, 0.0F, 0.0F};
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-        input.camera.target += flatForward * velocity;
+        movement.z -= 1.0F;
     }
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-        input.camera.target -= flatForward * velocity;
+        movement.z += 1.0F;
     }
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-        input.camera.target += right * velocity;
+        movement.x += 1.0F;
     }
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-        input.camera.target -= right * velocity;
+        movement.x -= 1.0F;
     }
+
+    input.character.isMoving = glm::length(movement) > 0.0F;
+    if (input.character.isMoving) {
+        const glm::vec3 direction = glm::normalize(movement);
+        input.character.position += direction * CharacterMoveSpeed * deltaTime;
+        input.character.facing = direction;
+        input.character.animationTime += deltaTime;
+    } else {
+        input.character.animationTime = 0.0F;
+    }
+
+    input.camera.target = input.character.position;
 }
 
 void loadMatrix(GLenum matrixMode, const glm::mat4& matrix) {
@@ -264,6 +281,18 @@ void drawCube() {
     glEnd();
 }
 
+float rotationDegreesForFacing(const glm::vec3& facing) {
+    return glm::degrees(std::atan2(facing.x, facing.z));
+}
+
+float walkBobOffset(const Character& character, const Model& model) {
+    if (!character.isMoving || model.animationCount == 0) {
+        return 0.0F;
+    }
+
+    return std::sin(character.animationTime * 12.0F) * 0.08F;
+}
+
 void drawModel(const Model& model) {
     glColor3f(0.82F, 0.76F, 0.65F);
     glBegin(GL_TRIANGLES);
@@ -287,7 +316,7 @@ void configureOpenGl() {
     glClearColor(0.48F, 0.72F, 1.0F, 1.0F);
 }
 
-void renderScene(const Camera& camera, const Model& manModel, int framebufferWidth, int framebufferHeight) {
+void renderScene(const Camera& camera, const Character& character, const Model& manModel, int framebufferWidth, int framebufferHeight) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     const float aspectRatio = framebufferHeight > 0
@@ -299,14 +328,17 @@ void renderScene(const Camera& camera, const Model& manModel, int framebufferWid
     loadMatrix(GL_MODELVIEW, camera.viewMatrix());
 
     drawGroundGrid();
+
+    glPushMatrix();
+    glTranslatef(character.position.x, character.position.y + walkBobOffset(character, manModel), character.position.z);
+    glRotatef(rotationDegreesForFacing(character.facing), 0.0F, 1.0F, 0.0F);
     if (manModel.isLoaded()) {
-        glPushMatrix();
         glScalef(0.01F, 0.01F, 0.01F);
         drawModel(manModel);
-        glPopMatrix();
     } else {
         drawCube();
     }
+    glPopMatrix();
 }
 
 GLFWwindow* createWindow() {
@@ -359,7 +391,7 @@ int main() {
         int framebufferWidth = 0;
         int framebufferHeight = 0;
         glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
-        renderScene(input.camera, manModel, framebufferWidth, framebufferHeight);
+        renderScene(input.camera, input.character, manModel, framebufferWidth, framebufferHeight);
 
         glfwSwapBuffers(window);
         glfwPollEvents();

@@ -9,15 +9,17 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 - Blue sky clear color.
 - Simple ground grid to make movement visible.
 - Loads `media/man_model.fbx` through Assimp and draws it in the world.
+- Camera follows the character model instead of panning independently.
+- WASD moves the character along world-grid X/Z directions, and the mouse wheel zooms the camera.
+- Starts a movement animation timer and applies a small walk bob while moving when the imported FBX contains animations.
 - Falls back to a basic colored cube when the model file is missing.
-- WASD movement across the isometric world and mouse-wheel zoom.
 
 ## Controls
 
 | Input | Action |
 | --- | --- |
-| `W` / `S` | Move forward / backward |
-| `A` / `D` | Strafe left / right |
+| `W` / `S` | Move along world -Z / +Z |
+| `A` / `D` | Move along world -X / +X |
 | Mouse wheel | Zoom camera in / out |
 | `Esc` | Close the window |
 
@@ -61,4 +63,4 @@ sudo apt install cmake g++ libglfw3-dev libglm-dev libassimp-dev libgl1-mesa-dev
 
 ## Assets
 
-Place the character FBX at `media/man_model.fbx`. The engine loads it at startup with Assimp, prints how many meshes and animations were found, and renders the bind-pose mesh in the scene. Animation playback is not implemented yet; the imported animation count is currently diagnostic information for the next engine step.
+Place the character FBX at `media/man_model.fbx`. The engine loads it at startup with Assimp, prints how many meshes and animations were found, and renders the bind-pose mesh in the scene. When the character moves, the prototype advances a movement animation timer and applies a small visible walk bob if the FBX reports animations. Full skeletal FBX animation playback still needs a bone palette, vertex weights, animation channel sampling, and skinning in a later step.
