@@ -44,8 +44,10 @@ constexpr const char *BodyModelPath = "media/models/Bob.fbx";
 constexpr const char *IdleAnimationPath = "media/anim_x/bob/Bob_Idle.fbx";
 constexpr const char *IdleToWalkAnimationPath =
     "media/animations/Bob_IdleToWalk.fbx";
+constexpr const char *WalkToStopAnimationPath =
+    "media/animations/Bob_WalkToStop.fbx";
 constexpr const char *WalkAnimationPath = "media/anim_x/bob/Bob_Walk.fbx";
-constexpr const char *BodyTexturePath = "media/textures/Body/MaleBody01.png";
+constexpr const char *BodyTexturePath = "media/textures/Body MaleBody01.png";
 
 struct Vertex {
   glm::vec3 position{};
@@ -164,6 +166,7 @@ enum class CharacterAnimationState {
   Idle,
   IdleToWalk,
   Walk,
+  WalkToStop,
 };
 
 struct Character {
@@ -787,14 +790,32 @@ glm::vec3 screenDirectionToWorldDirection(float screenRight, float screenUp) {
 
 void updateCharacterAnimationState(Character &character, bool wantsToMove,
                                    float deltaTime,
-                                   const AnimationClip &idleToWalkAnimation) {
+                                   const AnimationClip &idleToWalkAnimation,
+                                   const AnimationClip &walkToStopAnimation) {
   if (!wantsToMove) {
     character.isMoving = false;
-    if (character.animationState != CharacterAnimationState::Idle) {
+    if (character.animationState == CharacterAnimationState::Idle) {
+      character.animationTime += deltaTime;
+      return;
+    }
+
+    if (character.animationState != CharacterAnimationState::WalkToStop) {
+      character.animationState = CharacterAnimationState::WalkToStop;
+      character.animationTime = 0.0F;
+    }
+
+    const float transitionDuration =
+        animationDurationSeconds(walkToStopAnimation);
+    if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
       character.animationState = CharacterAnimationState::Idle;
       character.animationTime = 0.0F;
-    } else {
-      character.animationTime += deltaTime;
+      return;
+    }
+
+    character.animationTime += deltaTime;
+    if (character.animationTime >= transitionDuration) {
+      character.animationState = CharacterAnimationState::Idle;
+      character.animationTime = 0.0F;
     }
     return;
   }
@@ -802,7 +823,8 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
   const bool startedMoving = !character.isMoving;
   character.isMoving = true;
   if (startedMoving ||
-      character.animationState == CharacterAnimationState::Idle) {
+      character.animationState == CharacterAnimationState::Idle ||
+      character.animationState == CharacterAnimationState::WalkToStop) {
     character.animationState = CharacterAnimationState::IdleToWalk;
     character.animationTime = 0.0F;
   }
@@ -829,7 +851,8 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
 }
 
 void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
-                     const AnimationClip &idleToWalkAnimation) {
+                     const AnimationClip &idleToWalkAnimation,
+                     const AnimationClip &walkToStopAnimation) {
   if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
     glfwSetWindowShouldClose(window, GLFW_TRUE);
   }
@@ -857,7 +880,7 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
 
   updateCharacterAnimationState(input.character, wantsToMove,
                                 deltaTime * CharacterAnimationPlaybackSpeed,
-                                idleToWalkAnimation);
+                                idleToWalkAnimation, walkToStopAnimation);
   input.camera.target = input.character.position;
 }
 
@@ -1224,7 +1247,8 @@ const AnimationClip &
 activeAnimationForCharacter(const Character &character,
                             const AnimationClip &idleAnimation,
                             const AnimationClip &idleToWalkAnimation,
-                            const AnimationClip &walkAnimation) {
+                            const AnimationClip &walkAnimation,
+                            const AnimationClip &walkToStopAnimation) {
   switch (character.animationState) {
   case CharacterAnimationState::Idle:
     return idleAnimation;
@@ -1232,6 +1256,8 @@ activeAnimationForCharacter(const Character &character,
     return idleToWalkAnimation.isLoaded() ? idleToWalkAnimation : walkAnimation;
   case CharacterAnimationState::Walk:
     return walkAnimation;
+  case CharacterAnimationState::WalkToStop:
+    return walkToStopAnimation.isLoaded() ? walkToStopAnimation : idleAnimation;
   }
 
   return idleAnimation;
@@ -1314,9 +1340,12 @@ int main() {
       loadAnimationClip(IdleToWalkAnimationPath, "Bob_IdleToWalk", true);
   const AnimationClip walkAnimation =
       loadAnimationClip(WalkAnimationPath, "Bob_Walk", true);
+  const AnimationClip walkToStopAnimation =
+      loadAnimationClip(WalkToStopAnimationPath, "Bob_WalkToStop", true);
   printAnimationMatchReport(bodyModel, idleAnimation);
   printAnimationMatchReport(bodyModel, idleToWalkAnimation);
   printAnimationMatchReport(bodyModel, walkAnimation);
+  printAnimationMatchReport(bodyModel, walkToStopAnimation);
   configureOpenGl();
 
   float previousTime = static_cast<float>(glfwGetTime());
@@ -1325,13 +1354,15 @@ int main() {
     const float deltaTime = currentTime - previousTime;
     previousTime = currentTime;
 
-    processKeyboard(window, input, deltaTime, idleToWalkAnimation);
+    processKeyboard(window, input, deltaTime, idleToWalkAnimation,
+                    walkToStopAnimation);
 
     int framebufferWidth = 0;
     int framebufferHeight = 0;
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
     const AnimationClip &activeAnimation = activeAnimationForCharacter(
-        input.character, idleAnimation, idleToWalkAnimation, walkAnimation);
+        input.character, idleAnimation, idleToWalkAnimation, walkAnimation,
+        walkToStopAnimation);
     renderScene(input.camera, input.character, bodyModel, bodyTexture,
                 activeAnimation, framebufferWidth, framebufferHeight);
 
