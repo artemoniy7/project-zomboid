@@ -1,5 +1,10 @@
 #include <GLFW/glfw3.h>
 
+#include <assimp/Importer.hpp>
+#include <assimp/matrix4x4.h>
+#include <assimp/postprocess.h>
+#include <assimp/scene.h>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -7,7 +12,10 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
+#include <utility>
+#include <vector>
 
 namespace {
 constexpr int WindowWidth = 1280;
@@ -19,6 +27,26 @@ constexpr float MaxCameraDistance = 40.0F;
 constexpr float FieldOfView = 45.0F;
 constexpr float NearPlane = 0.1F;
 constexpr float FarPlane = 200.0F;
+constexpr const char* ManModelPath = "media/man_model.fbx";
+
+struct Vertex {
+    glm::vec3 position{};
+    glm::vec3 normal{0.0F, 1.0F, 0.0F};
+};
+
+struct Mesh {
+    std::vector<Vertex> vertices;
+    std::vector<unsigned int> indices;
+};
+
+struct Model {
+    std::vector<Mesh> meshes;
+    unsigned int animationCount = 0;
+
+    [[nodiscard]] bool isLoaded() const {
+        return !meshes.empty();
+    }
+};
 
 struct Camera {
     glm::vec3 target{0.0F, 0.0F, 0.0F};
@@ -49,6 +77,101 @@ struct Camera {
 struct InputState {
     Camera camera;
 };
+
+glm::mat4 toGlm(const aiMatrix4x4& matrix) {
+    glm::mat4 result{1.0F};
+    result[0][0] = matrix.a1;
+    result[1][0] = matrix.a2;
+    result[2][0] = matrix.a3;
+    result[3][0] = matrix.a4;
+    result[0][1] = matrix.b1;
+    result[1][1] = matrix.b2;
+    result[2][1] = matrix.b3;
+    result[3][1] = matrix.b4;
+    result[0][2] = matrix.c1;
+    result[1][2] = matrix.c2;
+    result[2][2] = matrix.c3;
+    result[3][2] = matrix.c4;
+    result[0][3] = matrix.d1;
+    result[1][3] = matrix.d2;
+    result[2][3] = matrix.d3;
+    result[3][3] = matrix.d4;
+    return result;
+}
+
+void appendMesh(const aiMesh& assimpMesh, const glm::mat4& transform, Model& model) {
+    Mesh mesh;
+    mesh.vertices.reserve(assimpMesh.mNumVertices);
+
+    const glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(transform)));
+    for (unsigned int vertexIndex = 0; vertexIndex < assimpMesh.mNumVertices; ++vertexIndex) {
+        const aiVector3D& sourcePosition = assimpMesh.mVertices[vertexIndex];
+        const glm::vec4 transformedPosition = transform * glm::vec4{sourcePosition.x, sourcePosition.y, sourcePosition.z, 1.0F};
+
+        glm::vec3 normal{0.0F, 1.0F, 0.0F};
+        if (assimpMesh.HasNormals()) {
+            const aiVector3D& sourceNormal = assimpMesh.mNormals[vertexIndex];
+            normal = glm::normalize(normalMatrix * glm::vec3{sourceNormal.x, sourceNormal.y, sourceNormal.z});
+        }
+
+        mesh.vertices.push_back(Vertex{glm::vec3{transformedPosition}, normal});
+    }
+
+    for (unsigned int faceIndex = 0; faceIndex < assimpMesh.mNumFaces; ++faceIndex) {
+        const aiFace& face = assimpMesh.mFaces[faceIndex];
+        if (face.mNumIndices != 3) {
+            continue;
+        }
+
+        mesh.indices.push_back(face.mIndices[0]);
+        mesh.indices.push_back(face.mIndices[1]);
+        mesh.indices.push_back(face.mIndices[2]);
+    }
+
+    if (!mesh.vertices.empty() && !mesh.indices.empty()) {
+        model.meshes.push_back(std::move(mesh));
+    }
+}
+
+void appendNodeMeshes(const aiScene& scene, const aiNode& node, const glm::mat4& parentTransform, Model& model) {
+    const glm::mat4 transform = parentTransform * toGlm(node.mTransformation);
+
+    for (unsigned int meshIndex = 0; meshIndex < node.mNumMeshes; ++meshIndex) {
+        const unsigned int sceneMeshIndex = node.mMeshes[meshIndex];
+        if (sceneMeshIndex < scene.mNumMeshes) {
+            appendMesh(*scene.mMeshes[sceneMeshIndex], transform, model);
+        }
+    }
+
+    for (unsigned int childIndex = 0; childIndex < node.mNumChildren; ++childIndex) {
+        appendNodeMeshes(scene, *node.mChildren[childIndex], transform, model);
+    }
+}
+
+Model loadModel(const std::filesystem::path& path) {
+    Model model;
+    if (!std::filesystem::exists(path)) {
+        std::cerr << "Model file was not found: " << path << "\n";
+        return model;
+    }
+
+    Assimp::Importer importer;
+    const aiScene* scene = importer.ReadFile(
+        path.string(),
+        aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_GenSmoothNormals | aiProcess_ImproveCacheLocality);
+
+    if (scene == nullptr || scene->mRootNode == nullptr) {
+        std::cerr << "Failed to load model " << path << ": " << importer.GetErrorString() << "\n";
+        return model;
+    }
+
+    model.animationCount = scene->mNumAnimations;
+    appendNodeMeshes(*scene, *scene->mRootNode, glm::mat4{1.0F}, model);
+
+    std::cout << "Loaded " << path << " with " << model.meshes.size() << " mesh(es) and " << model.animationCount
+              << " animation(s).\n";
+    return model;
+}
 
 void errorCallback(int error, const char* description) {
     std::cerr << "GLFW error " << error << ": " << description << '\n';
@@ -141,14 +264,30 @@ void drawCube() {
     glEnd();
 }
 
+void drawModel(const Model& model) {
+    glColor3f(0.82F, 0.76F, 0.65F);
+    glBegin(GL_TRIANGLES);
+    for (const Mesh& mesh : model.meshes) {
+        for (const unsigned int index : mesh.indices) {
+            if (index >= mesh.vertices.size()) {
+                continue;
+            }
+
+            const Vertex& vertex = mesh.vertices[index];
+            glNormal3f(vertex.normal.x, vertex.normal.y, vertex.normal.z);
+            glVertex3f(vertex.position.x, vertex.position.y, vertex.position.z);
+        }
+    }
+    glEnd();
+}
+
 void configureOpenGl() {
     glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
+    glDisable(GL_CULL_FACE);
     glClearColor(0.48F, 0.72F, 1.0F, 1.0F);
 }
 
-void renderScene(const Camera& camera, int framebufferWidth, int framebufferHeight) {
+void renderScene(const Camera& camera, const Model& manModel, int framebufferWidth, int framebufferHeight) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     const float aspectRatio = framebufferHeight > 0
@@ -160,7 +299,14 @@ void renderScene(const Camera& camera, int framebufferWidth, int framebufferHeig
     loadMatrix(GL_MODELVIEW, camera.viewMatrix());
 
     drawGroundGrid();
-    drawCube();
+    if (manModel.isLoaded()) {
+        glPushMatrix();
+        glScalef(0.01F, 0.01F, 0.01F);
+        drawModel(manModel);
+        glPopMatrix();
+    } else {
+        drawCube();
+    }
 }
 
 GLFWwindow* createWindow() {
@@ -199,6 +345,7 @@ int main() {
     glfwSetWindowUserPointer(window, &input);
     glfwSetScrollCallback(window, scrollCallback);
 
+    const Model manModel = loadModel(ManModelPath);
     configureOpenGl();
 
     float previousTime = static_cast<float>(glfwGetTime());
@@ -212,7 +359,7 @@ int main() {
         int framebufferWidth = 0;
         int framebufferHeight = 0;
         glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
-        renderScene(input.camera, framebufferWidth, framebufferHeight);
+        renderScene(input.camera, manModel, framebufferWidth, framebufferHeight);
 
         glfwSwapBuffers(window);
         glfwPollEvents();

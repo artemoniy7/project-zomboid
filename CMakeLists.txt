@@ -9,6 +9,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(OpenGL REQUIRED)
 find_package(glfw3 CONFIG QUIET)
 find_package(glm CONFIG QUIET)
+find_package(assimp CONFIG QUIET)
+if (NOT assimp_FOUND)
+    find_package(Assimp QUIET)
+endif()
 
 add_executable(pz_engine main.cpp)
 
@@ -32,6 +36,16 @@ endif()
 
 if (TARGET glm::glm)
     target_link_libraries(pz_engine PRIVATE glm::glm)
+endif()
+
+if (TARGET assimp::assimp)
+    target_link_libraries(pz_engine PRIVATE assimp::assimp)
+elseif (TARGET Assimp::Assimp)
+    target_link_libraries(pz_engine PRIVATE Assimp::Assimp)
+elseif (TARGET assimp)
+    target_link_libraries(pz_engine PRIVATE assimp)
+else()
+    message(FATAL_ERROR "Assimp was not found. Install Assimp development files to load FBX models.")
 endif()
 
 target_link_libraries(pz_engine PRIVATE OpenGL::GL)
