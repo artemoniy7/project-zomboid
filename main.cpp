@@ -812,6 +812,17 @@ float walkToStopCoastScale(const Character &character,
          remainingTransition;
 }
 
+float characterAnimationPlaybackSpeed(const Character &character,
+                                      bool wantsToMove) {
+  const bool isTransitioning =
+      (wantsToMove &&
+       character.animationState != CharacterAnimationState::Walk) ||
+      (!wantsToMove &&
+       character.animationState != CharacterAnimationState::Idle);
+  return isTransitioning ? CharacterTransitionAnimationPlaybackSpeed
+                         : CharacterAnimationPlaybackSpeed;
+}
+
 void updateCharacterAnimationState(Character &character, bool wantsToMove,
                                    float deltaTime,
                                    const AnimationClip &idleToWalkAnimation,
@@ -900,6 +911,20 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     const glm::vec3 direction = glm::normalize(movement);
     input.character.position += direction * CharacterMoveSpeed * deltaTime;
     input.character.facing = direction;
+  }
+
+  updateCharacterAnimationState(
+      input.character, wantsToMove,
+      deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
+      idleToWalkAnimation, walkToStopAnimation);
+
+  if (!wantsToMove) {
+    const float coastScale =
+        walkToStopCoastScale(input.character, walkToStopAnimation);
+    if (coastScale > 0.0F) {
+      input.character.position += input.character.facing * CharacterMoveSpeed *
+                                  coastScale * deltaTime;
+    }
   }
 
   const bool isTransitioning =
