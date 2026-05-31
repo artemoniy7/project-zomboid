@@ -10,16 +10,16 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 - Simple ground grid to make movement visible.
 - Loads `media/man_model.fbx` through Assimp and draws it in the world.
 - Camera follows the character model instead of panning independently.
-- WASD moves the character along world-grid X/Z directions, and the mouse wheel zooms the camera.
-- Starts a movement animation timer and applies a small walk bob while moving when the imported FBX contains animations.
+- WASD moves the character like Project Zomboid: up/down/left/right on screen across diagonal world-tile directions.
+- Loads `media/Kate_Walk.X` as a separate walk animation clip and applies a small walk bob while moving when the clip is present.
 - Falls back to a basic colored cube when the model file is missing.
 
 ## Controls
 
 | Input | Action |
 | --- | --- |
-| `W` / `S` | Move along world -Z / +Z |
-| `A` / `D` | Move along world -X / +X |
+| `W` / `S` | Move up / down on screen across diagonal tiles |
+| `A` / `D` | Move left / right on screen across diagonal tiles |
 | Mouse wheel | Zoom camera in / out |
 | `Esc` | Close the window |
 
@@ -63,4 +63,6 @@ sudo apt install cmake g++ libglfw3-dev libglm-dev libassimp-dev libgl1-mesa-dev
 
 ## Assets
 
-Place the character FBX at `media/man_model.fbx`. The engine loads it at startup with Assimp, prints how many meshes and animations were found, and renders the bind-pose mesh in the scene. When the character moves, the prototype advances a movement animation timer and applies a small visible walk bob if the FBX reports animations. Full skeletal FBX animation playback still needs a bone palette, vertex weights, animation channel sampling, and skinning in a later step.
+Place the character FBX at `media/man_model.fbx`. Place the walk animation at `media/Kate_Walk.X`. The engine loads both files at startup with Assimp, prints how many model meshes and animation channels were found, and renders the character mesh in the scene.
+
+`Kate_Walk.X` is currently loaded as animation metadata and used to enable a visible walk bob while the character moves. To make the real skeletal walk play on the model, the next engine step is to import a skeleton from the model, import bone IDs/weights per vertex, match animation channels from `Kate_Walk.X` to bones by name, sample position/rotation/scale keys each frame, build final bone matrices, and skin vertices on the CPU or GPU.
