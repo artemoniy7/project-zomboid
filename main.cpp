@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -175,6 +176,12 @@ glm::quat toGlm(const aiQuaternion &quaternion) {
 }
 
 std::string normalizeAssimpName(std::string name) {
+  const std::size_t separatorPosition = name.find_last_of("|:/\\");
+  if (separatorPosition != std::string::npos &&
+      separatorPosition + 1 < name.size()) {
+    name = name.substr(separatorPosition + 1);
+  }
+
   const std::size_t dotPosition = name.find_last_of('.');
   if (dotPosition == std::string::npos || dotPosition + 1 >= name.size()) {
     return name;
@@ -187,6 +194,49 @@ std::string normalizeAssimpName(std::string name) {
     name.erase(dotPosition);
   }
   return name;
+}
+
+std::string normalizedAnimationSearchName(const std::string &name) {
+  std::string normalized;
+  normalized.reserve(name.size());
+  for (char value : name) {
+    if (value != '_' && value != '-' && value != ' ' && value != '|') {
+      normalized.push_back(
+          static_cast<char>(std::tolower(static_cast<unsigned char>(value))));
+    }
+  }
+  return normalized;
+}
+
+const aiAnimation &chooseAnimation(const aiScene &scene,
+                                   const std::string &preferredName) {
+  const std::string preferred = normalizedAnimationSearchName(preferredName);
+  const aiAnimation *bestAnimation = scene.mAnimations[0];
+  int bestScore = -1;
+
+  for (unsigned int animationIndex = 0; animationIndex < scene.mNumAnimations;
+       ++animationIndex) {
+    const aiAnimation &animation = *scene.mAnimations[animationIndex];
+    const std::string candidate =
+        normalizedAnimationSearchName(animation.mName.C_Str());
+    int score = 0;
+    if (!preferred.empty() && candidate.find(preferred) != std::string::npos) {
+      score += 100;
+    }
+    if (animation.mNumChannels > bestAnimation->mNumChannels) {
+      score += 10;
+    }
+    if (animation.mDuration > bestAnimation->mDuration) {
+      score += 1;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestAnimation = &animation;
+    }
+  }
+
+  return *bestAnimation;
 }
 
 SkeletonNode buildSkeletonNode(const aiNode &node) {
@@ -373,7 +423,7 @@ AnimationClip loadAnimationClip(const std::filesystem::path &path,
     return clip;
   }
 
-  const aiAnimation &animation = *scene->mAnimations[0];
+  const aiAnimation &animation = chooseAnimation(*scene, fallbackName);
   clip.name = animation.mName.C_Str();
   if (clip.name.empty()) {
     clip.name = std::move(fallbackName);
@@ -419,6 +469,34 @@ AnimationClip loadAnimationClip(const std::filesystem::path &path,
             << clip.channels.size() << " channel(s), " << clip.durationTicks
             << " tick(s), " << clip.ticksPerSecond << " tick(s)/second.\n";
   return clip;
+}
+
+std::size_t countMatchingAnimationChannels(const Model &model,
+                                           const AnimationClip &animation) {
+  std::size_t matchingChannels = 0;
+  for (const AnimationChannel &channel : animation.channels) {
+    if (model.boneIndexByName.contains(channel.nodeName)) {
+      ++matchingChannels;
+    }
+  }
+  return matchingChannels;
+}
+
+void printAnimationMatchReport(const Model &model,
+                               const AnimationClip &animation) {
+  if (!animation.isLoaded()) {
+    return;
+  }
+
+  const std::size_t matchingChannels =
+      countMatchingAnimationChannels(model, animation);
+  std::cout << "Animation '" << animation.name << "' matches "
+            << matchingChannels << "/" << animation.channels.size()
+            << " channel(s) to " << model.bones.size() << " model bone(s).\n";
+  if (matchingChannels == 0) {
+    std::cerr << "No animation channels matched model bones. Check that the "
+                 "FBX action uses the same Bip01 bone names as Bob.fbx.\n";
+  }
 }
 
 void errorCallback(int error, const char *description) {
@@ -667,8 +745,8 @@ glm::mat4 nodeTransformForAnimation(const SkeletonNode &node,
 
   const AnimationChannel &channel = animation.channels[channelIterator->second];
   const TransformComponents bindTransform = decomposeTransform(node.transform);
-  const glm::vec3 position =
-      sampleVectorKeys(animationTime, channel.positions, bindTransform.position);
+  const glm::vec3 position = sampleVectorKeys(animationTime, channel.positions,
+                                              bindTransform.position);
   const glm::quat rotation = sampleQuaternionKeys(
       animationTime, channel.rotations, bindTransform.rotation);
   const glm::vec3 scale =
@@ -851,6 +929,8 @@ int main() {
       loadAnimationClip(IdleAnimationPath, "Bob_Idle");
   const AnimationClip walkAnimation =
       loadAnimationClip(WalkAnimationPath, "Bob_Walk");
+  printAnimationMatchReport(bodyModel, idleAnimation);
+  printAnimationMatchReport(bodyModel, walkAnimation);
   configureOpenGl();
 
   float previousTime = static_cast<float>(glfwGetTime());
