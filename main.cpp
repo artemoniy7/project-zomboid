@@ -33,6 +33,7 @@ constexpr int WindowWidth = 1280;
 constexpr int WindowHeight = 720;
 constexpr float CharacterMoveSpeed = 3.2F;
 constexpr float CharacterAnimationPlaybackSpeed = 0.85F;
+constexpr float CharacterTransitionAnimationPlaybackSpeed = 1.35F;
 constexpr float ZoomSpeed = 1.25F;
 constexpr float MinCameraDistance = 4.0F;
 constexpr float MaxCameraDistance = 40.0F;
@@ -127,6 +128,7 @@ struct AnimationClip {
   double durationTicks = 0.0;
   double ticksPerSecond = 24.0;
   bool retargetFirstFrameToBindPose = false;
+  bool keepBindPoseTranslations = false;
   std::vector<AnimationChannel> channels;
   std::unordered_map<std::string, std::size_t> channelIndexByNodeName;
 
@@ -453,9 +455,11 @@ Model loadModel(const std::filesystem::path &path) {
 
 AnimationClip loadAnimationClip(const std::filesystem::path &path,
                                 std::string fallbackName,
-                                bool retargetFirstFrameToBindPose = false) {
+                                bool retargetFirstFrameToBindPose = false,
+                                bool keepBindPoseTranslations = false) {
   AnimationClip clip;
   clip.retargetFirstFrameToBindPose = retargetFirstFrameToBindPose;
+  clip.keepBindPoseTranslations = keepBindPoseTranslations;
   if (!std::filesystem::exists(path)) {
     std::cerr << "Animation file was not found: " << path << "\n";
     return clip;
@@ -878,8 +882,16 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     input.character.facing = direction;
   }
 
+  const bool isTransitioning =
+      (wantsToMove &&
+       input.character.animationState != CharacterAnimationState::Walk) ||
+      (!wantsToMove &&
+       input.character.animationState != CharacterAnimationState::Idle);
+  const float animationPlaybackSpeed =
+      isTransitioning ? CharacterTransitionAnimationPlaybackSpeed
+                      : CharacterAnimationPlaybackSpeed;
   updateCharacterAnimationState(input.character, wantsToMove,
-                                deltaTime * CharacterAnimationPlaybackSpeed,
+                                deltaTime * animationPlaybackSpeed,
                                 idleToWalkAnimation, walkToStopAnimation);
   input.camera.target = input.character.position;
 }
@@ -1110,10 +1122,18 @@ glm::mat4 nodeTransformForAnimation(const SkeletonNode &node,
   }
 
   const double referenceTime = firstAnimationKeyTime(channel);
-  const glm::vec3 referencePosition = sampleVectorKeys(
-      referenceTime, channel.positions, bindTransform.position);
   const glm::quat referenceRotation = sampleQuaternionKeys(
       referenceTime, channel.rotations, bindTransform.rotation);
+
+  if (animation.keepBindPoseTranslations) {
+    const glm::quat retargetedRotation =
+        bindTransform.rotation * glm::inverse(referenceRotation) * rotation;
+    return composeTransform(TransformComponents{
+        bindTransform.position, retargetedRotation, bindTransform.scale});
+  }
+
+  const glm::vec3 referencePosition = sampleVectorKeys(
+      referenceTime, channel.positions, bindTransform.position);
   const glm::vec3 referenceScale =
       sampleVectorKeys(referenceTime, channel.scales, bindTransform.scale);
   const glm::mat4 referenceTransform = composeTransform(TransformComponents{
@@ -1337,11 +1357,11 @@ int main() {
   const AnimationClip idleAnimation =
       loadAnimationClip(IdleAnimationPath, "Bob_Idle");
   const AnimationClip idleToWalkAnimation =
-      loadAnimationClip(IdleToWalkAnimationPath, "Bob_IdleToWalk", true);
+      loadAnimationClip(IdleToWalkAnimationPath, "Bob_IdleToWalk", true, true);
   const AnimationClip walkAnimation =
-      loadAnimationClip(WalkAnimationPath, "Bob_Walk", true);
+      loadAnimationClip(WalkAnimationPath, "Bob_Walk", true, true);
   const AnimationClip walkToStopAnimation =
-      loadAnimationClip(WalkToStopAnimationPath, "Bob_WalkToStop", true);
+      loadAnimationClip(WalkToStopAnimationPath, "Bob_WalkToStop", true, true);
   printAnimationMatchReport(bodyModel, idleAnimation);
   printAnimationMatchReport(bodyModel, idleToWalkAnimation);
   printAnimationMatchReport(bodyModel, walkAnimation);
