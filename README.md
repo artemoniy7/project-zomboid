@@ -32,6 +32,15 @@ cmake --build build
 ./build/pz_engine
 ```
 
+If you want to compile the single source file directly with `g++` instead of CMake, use `pkg-config` to ask GLFW for the required compiler and linker flags:
+
+```bash
+g++ -std=c++20 -Wall -Wextra -Wpedantic main.cpp -o pz_engine $(pkg-config --cflags --libs glfw3) -lGL
+./pz_engine
+```
+
+GLM is header-only, so it does not need an extra linker flag. If `pkg-config` cannot find `glfw3`, install the GLFW development package first or use the CMake build above.
+
 On Ubuntu-like systems the package names are typically similar to:
 
 ```bash
