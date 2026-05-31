@@ -1,15 +1,15 @@
 # Project Zomboid-style C++ Engine Prototype
 
-A tiny first-person world-rendering prototype built with C++20, GLFW, OpenGL, and GLM.
+A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, and GLM.
 
 ## Current features
 
 - GLFW window and real-time game loop.
-- GLM camera math with perspective projection.
+- GLM isometric camera math with perspective projection.
 - Blue sky clear color.
 - Simple ground grid to make movement visible.
 - A basic colored cube in the world.
-- WASD movement and mouse look.
+- WASD movement across the isometric world and mouse-wheel zoom.
 
 ## Controls
 
@@ -17,9 +17,7 @@ A tiny first-person world-rendering prototype built with C++20, GLFW, OpenGL, an
 | --- | --- |
 | `W` / `S` | Move forward / backward |
 | `A` / `D` | Strafe left / right |
-| Mouse | Rotate camera |
-| `Space` | Move up |
-| `Left Shift` | Move down |
+| Mouse wheel | Zoom camera in / out |
 | `Esc` | Close the window |
 
 ## Build

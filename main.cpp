@@ -6,33 +6,31 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
 namespace {
 constexpr int WindowWidth = 1280;
 constexpr int WindowHeight = 720;
-constexpr float MouseSensitivity = 0.12F;
-constexpr float MovementSpeed = 5.0F;
-constexpr float FieldOfView = 70.0F;
+constexpr float MovementSpeed = 8.0F;
+constexpr float ZoomSpeed = 1.25F;
+constexpr float MinCameraDistance = 4.0F;
+constexpr float MaxCameraDistance = 40.0F;
+constexpr float FieldOfView = 45.0F;
 constexpr float NearPlane = 0.1F;
 constexpr float FarPlane = 200.0F;
 
 struct Camera {
-    glm::vec3 position{0.0F, 1.6F, 6.0F};
-    float yaw = -90.0F;
-    float pitch = 0.0F;
+    glm::vec3 target{0.0F, 0.0F, 0.0F};
+    float distance = 14.0F;
+
+    [[nodiscard]] glm::vec3 position() const {
+        const glm::vec3 isometricOffset{1.0F, 1.25F, 1.0F};
+        return target + glm::normalize(isometricOffset) * distance;
+    }
 
     [[nodiscard]] glm::vec3 forward() const {
-        const float yawRadians = glm::radians(yaw);
-        const float pitchRadians = glm::radians(pitch);
-        glm::vec3 direction{
-            std::cos(yawRadians) * std::cos(pitchRadians),
-            std::sin(pitchRadians),
-            std::sin(yawRadians) * std::cos(pitchRadians),
-        };
-        return glm::normalize(direction);
+        return glm::normalize(target - position());
     }
 
     [[nodiscard]] glm::vec3 right() const {
@@ -40,14 +38,15 @@ struct Camera {
     }
 
     [[nodiscard]] glm::mat4 viewMatrix() const {
-        return glm::lookAt(position, position + forward(), glm::vec3{0.0F, 1.0F, 0.0F});
+        return glm::lookAt(position(), target, glm::vec3{0.0F, 1.0F, 0.0F});
+    }
+
+    void zoom(float amount) {
+        distance = std::clamp(distance - amount * ZoomSpeed, MinCameraDistance, MaxCameraDistance);
     }
 };
 
 struct InputState {
-    bool firstMouse = true;
-    double lastMouseX = WindowWidth / 2.0;
-    double lastMouseY = WindowHeight / 2.0;
     Camera camera;
 };
 
@@ -59,25 +58,13 @@ void framebufferSizeCallback(GLFWwindow*, int width, int height) {
     glViewport(0, 0, width, height);
 }
 
-void mouseCallback(GLFWwindow* window, double xPosition, double yPosition) {
+void scrollCallback(GLFWwindow* window, double, double yOffset) {
     auto* input = static_cast<InputState*>(glfwGetWindowUserPointer(window));
     if (input == nullptr) {
         return;
     }
 
-    if (input->firstMouse) {
-        input->lastMouseX = xPosition;
-        input->lastMouseY = yPosition;
-        input->firstMouse = false;
-    }
-
-    const auto xOffset = static_cast<float>(xPosition - input->lastMouseX) * MouseSensitivity;
-    const auto yOffset = static_cast<float>(input->lastMouseY - yPosition) * MouseSensitivity;
-    input->lastMouseX = xPosition;
-    input->lastMouseY = yPosition;
-
-    input->camera.yaw += xOffset;
-    input->camera.pitch = std::clamp(input->camera.pitch + yOffset, -89.0F, 89.0F);
+    input->camera.zoom(static_cast<float>(yOffset));
 }
 
 void processKeyboard(GLFWwindow* window, InputState& input, float deltaTime) {
@@ -91,22 +78,16 @@ void processKeyboard(GLFWwindow* window, InputState& input, float deltaTime) {
     const glm::vec3 right = input.camera.right();
 
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-        input.camera.position += flatForward * velocity;
+        input.camera.target += flatForward * velocity;
     }
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-        input.camera.position -= flatForward * velocity;
+        input.camera.target -= flatForward * velocity;
     }
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-        input.camera.position += right * velocity;
+        input.camera.target += right * velocity;
     }
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-        input.camera.position -= right * velocity;
-    }
-    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-        input.camera.position.y += velocity;
-    }
-    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
-        input.camera.position.y -= velocity;
+        input.camera.target -= right * velocity;
     }
 }
 
@@ -196,7 +177,7 @@ GLFWwindow* createWindow() {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
     glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     return window;
 }
 } // namespace
@@ -216,7 +197,7 @@ int main() {
 
     InputState input;
     glfwSetWindowUserPointer(window, &input);
-    glfwSetCursorPosCallback(window, mouseCallback);
+    glfwSetScrollCallback(window, scrollCallback);
 
     configureOpenGl();
 
