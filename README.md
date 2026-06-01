@@ -5,9 +5,10 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 ## Current features
 
 - GLFW window and real-time game loop.
-- GLM isometric camera math with perspective projection, using Project Zomboid-style 60° FOV plus a classic 45° horizontal yaw and 35.264° downward pitch.
+- GLM isometric camera math with orthographic projection, using Project Zomboid-style 60° FOV plus a 45° horizontal yaw and 30° downward pitch for 2:1 dimetric tile alignment.
 - Blue sky clear color.
 - Simple ground grid to make movement visible.
+- Loads the Tiles1x texture pack and fills the ground tile layer with `blends_grassoverlays_01_0` beneath the rest of the scene.
 - Loads `media/models/Bob.fbx` through Assimp and draws it in the world.
 - Camera follows the character model instead of panning independently.
 - WASD moves the character like Project Zomboid: up/down/left/right on screen across diagonal world-tile directions.
