@@ -1657,6 +1657,45 @@ boneMatricesForCharacter(const Character &character, const Model &bodyModel,
                            characterAnimationBlendFactor(character));
 }
 
+const AnimationClip &
+activeAnimationForCharacter(const Character &character,
+                            const AnimationClip &idleAnimation,
+                            const AnimationClip &idleToWalkAnimation,
+                            const AnimationClip &walkAnimation,
+                            const AnimationClip &walkToStopAnimation) {
+  return animationForCharacterState(character.animationState, idleAnimation,
+                                    idleToWalkAnimation, walkAnimation,
+                                    walkToStopAnimation);
+}
+
+std::vector<glm::mat4>
+boneMatricesForCharacter(const Character &character, const Model &bodyModel,
+                         const AnimationClip &idleAnimation,
+                         const AnimationClip &idleToWalkAnimation,
+                         const AnimationClip &walkAnimation,
+                         const AnimationClip &walkToStopAnimation) {
+  const AnimationClip &activeAnimation =
+      activeAnimationForCharacter(character, idleAnimation, idleToWalkAnimation,
+                                  walkAnimation, walkToStopAnimation);
+  std::vector<glm::mat4> activeBoneMatrices =
+      computeBoneMatrices(bodyModel, activeAnimation, character.animationTime,
+                          isLoopingAnimationState(character.animationState));
+
+  if (!character.isAnimationBlending()) {
+    return activeBoneMatrices;
+  }
+
+  const AnimationClip &sourceAnimation = animationForCharacterState(
+      character.animationBlendSourceState, idleAnimation, idleToWalkAnimation,
+      walkAnimation, walkToStopAnimation);
+  const std::vector<glm::mat4> sourceBoneMatrices = computeBoneMatrices(
+      bodyModel, sourceAnimation, character.animationBlendSourceTime,
+      isLoopingAnimationState(character.animationBlendSourceState));
+
+  return blendBoneMatrices(sourceBoneMatrices, activeBoneMatrices,
+                           characterAnimationBlendFactor(character));
+}
+
 void renderScene(const Camera &camera, const Character &character,
                  const Model &bodyModel, const Texture2D &bodyTexture,
                  const CharacterAnimationClips &animations,
