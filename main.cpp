@@ -34,7 +34,12 @@ constexpr int WindowHeight = 720;
 constexpr float CharacterMoveSpeed = 3.2F;
 constexpr float CharacterAnimationPlaybackSpeed = 0.85F;
 constexpr float CharacterTransitionAnimationPlaybackSpeed = 1.35F;
+constexpr float CharacterStopToIdleBlendDuration = 0.18F;
+constexpr float CharacterStartAccelerationMinScale = 0.12F;
 constexpr float CharacterStopCoastSpeedScale = 0.55F;
+constexpr float CharacterIdleTurnThresholdDegrees = 22.5F;
+constexpr float CharacterIdleTurnMoveStartProgress = 0.45F;
+constexpr float CharacterMovingTurnAngularSpeedDegrees = 540.0F;
 constexpr float ZoomSpeed = 1.25F;
 constexpr float MinCameraDistance = 4.0F;
 constexpr float MaxCameraDistance = 40.0F;
@@ -49,7 +54,22 @@ constexpr const char *IdleToWalkAnimationPath =
 constexpr const char *WalkToStopAnimationPath =
     "media/anim_x/bob/Bob_WalkToStop.fbx";
 constexpr const char *WalkAnimationPath = "media/anim_x/bob/Bob_Walk.fbx";
+constexpr const char *IdleTurn45LAnimationPath =
+    "media/anim_x/bob/Bob_IdleTurn45L.fbx";
+constexpr const char *IdleTurn45RAnimationPath =
+    "media/anim_x/bob/Bob_IdleTurn45R.fbx";
+constexpr const char *IdleTurn90LAnimationPath =
+    "media/anim_x/bob/Bob_IdleTurn90L.fbx";
+constexpr const char *IdleTurn90RAnimationPath =
+    "media/anim_x/bob/Bob_IdleTurn90R.fbx";
+constexpr const char *IdleTurn180LAnimationPath =
+    "media/anim_x/bob/Bob_IdleTurn180L.fbx";
+constexpr const char *IdleTurn180RAnimationPath =
+    "media/anim_x/bob/Bob_IdleTurn180R.fbx";
 constexpr const char *BodyTexturePath = "media/textures/Body/MaleBody01.png";
+constexpr const char *Tiles1xTexturePackPath = "media/texturepacks/Tiles1x";
+constexpr float TileSpriteWorldScale = 1.0F / 64.0F;
+constexpr int MaxDemoTiles = 64;
 
 struct Vertex {
   glm::vec3 position{};
@@ -86,6 +106,35 @@ struct PngImage {
   std::vector<unsigned char> pixels;
 
   [[nodiscard]] bool isLoaded() const { return !pixels.empty(); }
+};
+
+struct TileDefinition {
+  std::string name;
+  std::size_t atlasIndex = 0;
+  glm::ivec2 position{0, 0};
+  glm::ivec2 size{0, 0};
+  glm::ivec2 frameOffset{0, 0};
+  glm::ivec2 frameSize{64, 128};
+};
+
+struct TileAtlas {
+  Texture2D texture;
+  std::filesystem::path imagePath;
+};
+
+struct PlacedTile {
+  std::size_t tileIndex = 0;
+  glm::vec3 position{0.0F, 0.0F, 0.0F};
+};
+
+struct TileSet {
+  std::vector<TileAtlas> atlases;
+  std::vector<TileDefinition> tiles;
+  std::vector<PlacedTile> demoTiles;
+
+  [[nodiscard]] bool isLoaded() const {
+    return !atlases.empty() && !tiles.empty();
+  }
 };
 
 struct SkeletonNode {
@@ -138,6 +187,19 @@ struct AnimationClip {
   }
 };
 
+struct CharacterAnimationClips {
+  AnimationClip idle;
+  AnimationClip idleToWalk;
+  AnimationClip walk;
+  AnimationClip walkToStop;
+  AnimationClip idleTurn45L;
+  AnimationClip idleTurn45R;
+  AnimationClip idleTurn90L;
+  AnimationClip idleTurn90R;
+  AnimationClip idleTurn180L;
+  AnimationClip idleTurn180R;
+};
+
 struct Camera {
   glm::vec3 target{0.0F, 0.0F, 0.0F};
   float distance = 14.0F;
@@ -170,14 +232,33 @@ enum class CharacterAnimationState {
   IdleToWalk,
   Walk,
   WalkToStop,
+  IdleTurn45L,
+  IdleTurn45R,
+  IdleTurn90L,
+  IdleTurn90R,
+  IdleTurn180L,
+  IdleTurn180R,
 };
 
 struct Character {
   glm::vec3 position{0.0F, 0.0F, 0.0F};
   glm::vec3 facing{0.0F, 0.0F, 1.0F};
+  glm::vec3 turnStartFacing{0.0F, 0.0F, 1.0F};
+  glm::vec3 turnTargetFacing{0.0F, 0.0F, 1.0F};
+  float turnAngleRadians = 0.0F;
   float animationTime = 0.0F;
+  float animationBlendTime = 0.0F;
+  float animationBlendDuration = 0.0F;
+  float animationBlendSourceTime = 0.0F;
   bool isMoving = false;
   CharacterAnimationState animationState = CharacterAnimationState::Idle;
+  CharacterAnimationState animationBlendSourceState =
+      CharacterAnimationState::Idle;
+
+  [[nodiscard]] bool isAnimationBlending() const {
+    return animationBlendDuration > std::numeric_limits<float>::epsilon() &&
+           animationBlendTime < animationBlendDuration;
+  }
 };
 
 struct InputState {
@@ -239,7 +320,7 @@ std::string normalizedAnimationSearchName(const std::string &name) {
   std::string normalized;
   normalized.reserve(name.size());
   for (char value : name) {
-    if (value != '_' && value != '-' && value != ' ' && value != '|') {
+    if (std::isalnum(static_cast<unsigned char>(value)) != 0) {
       normalized.push_back(
           static_cast<char>(std::tolower(static_cast<unsigned char>(value))));
     }
@@ -247,9 +328,18 @@ std::string normalizedAnimationSearchName(const std::string &name) {
   return normalized;
 }
 
+std::string withoutNumericSuffix(std::string value) {
+  while (!value.empty() &&
+         std::isdigit(static_cast<unsigned char>(value.back())) != 0) {
+    value.pop_back();
+  }
+  return value;
+}
+
 const aiAnimation &chooseAnimation(const aiScene &scene,
                                    const std::string &preferredName) {
   const std::string preferred = normalizedAnimationSearchName(preferredName);
+  const std::string preferredBase = withoutNumericSuffix(preferred);
   const aiAnimation *bestAnimation = scene.mAnimations[0];
   int bestScore = -1;
 
@@ -258,9 +348,18 @@ const aiAnimation &chooseAnimation(const aiScene &scene,
     const aiAnimation &animation = *scene.mAnimations[animationIndex];
     const std::string candidate =
         normalizedAnimationSearchName(animation.mName.C_Str());
+    const std::string candidateBase = withoutNumericSuffix(candidate);
     int score = 0;
-    if (!preferred.empty() && candidate.find(preferred) != std::string::npos) {
-      score += 100;
+    if (!preferred.empty() && candidate == preferred) {
+      score += 300;
+    } else if (!preferredBase.empty() && candidateBase == preferredBase) {
+      score += 250;
+    } else if (!preferred.empty() &&
+               candidate.find(preferred) != std::string::npos) {
+      score += 200;
+    } else if (!preferredBase.empty() &&
+               candidate.find(preferredBase) != std::string::npos) {
+      score += 150;
     }
     if (animation.mNumChannels > bestAnimation->mNumChannels) {
       score += 10;
@@ -777,6 +876,184 @@ Texture2D loadTexture2D(const std::filesystem::path &path) {
   return texture;
 }
 
+std::string trimWhitespace(std::string value) {
+  const auto first =
+      std::find_if_not(value.begin(), value.end(), [](unsigned char character) {
+        return std::isspace(character) != 0;
+      });
+  const auto last = std::find_if_not(value.rbegin(), value.rend(),
+                                     [](unsigned char character) {
+                                       return std::isspace(character) != 0;
+                                     })
+                        .base();
+  if (first >= last) {
+    return {};
+  }
+  return {first, last};
+}
+
+std::string stripTomlComment(const std::string &line) {
+  const std::size_t commentPosition = line.find('#');
+  return commentPosition == std::string::npos ? line
+                                              : line.substr(0, commentPosition);
+}
+
+std::vector<int> parseTomlIntegerArray(const std::vector<std::string> &lines,
+                                       std::size_t &lineIndex) {
+  std::vector<int> values;
+  std::string combined = stripTomlComment(lines[lineIndex]);
+  while (combined.find(']') == std::string::npos &&
+         lineIndex + 1 < lines.size()) {
+    ++lineIndex;
+    combined += stripTomlComment(lines[lineIndex]);
+  }
+
+  std::string number;
+  for (char character : combined) {
+    if (std::isdigit(static_cast<unsigned char>(character)) != 0 ||
+        character == '-') {
+      number.push_back(character);
+      continue;
+    }
+
+    if (!number.empty()) {
+      values.push_back(std::stoi(number));
+      number.clear();
+    }
+  }
+  if (!number.empty()) {
+    values.push_back(std::stoi(number));
+  }
+  return values;
+}
+
+void parseTileMetadata(const std::filesystem::path &metadataPath,
+                       std::size_t atlasIndex,
+                       std::vector<TileDefinition> &tiles) {
+  std::ifstream file(metadataPath);
+  if (!file) {
+    std::cerr << "Tile metadata file was not found: " << metadataPath << "\n";
+    return;
+  }
+
+  std::vector<std::string> lines;
+  std::string line;
+  while (std::getline(file, line)) {
+    lines.push_back(line);
+  }
+
+  TileDefinition currentTile;
+  bool hasCurrentTile = false;
+  auto commitTile = [&]() {
+    if (!hasCurrentTile || currentTile.name.empty()) {
+      return;
+    }
+    if (currentTile.size.x <= 0 || currentTile.size.y <= 0 ||
+        currentTile.frameSize.x <= 0 || currentTile.frameSize.y <= 0) {
+      std::cerr << "Skipping incomplete tile metadata entry '"
+                << currentTile.name << "' from " << metadataPath << "\n";
+      return;
+    }
+    tiles.push_back(currentTile);
+  };
+
+  for (std::size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
+    const std::string trimmed =
+        trimWhitespace(stripTomlComment(lines[lineIndex]));
+    if (trimmed.empty()) {
+      continue;
+    }
+
+    if (trimmed.front() == '[' && trimmed.back() == ']') {
+      commitTile();
+      currentTile = TileDefinition{};
+      currentTile.name = trimmed.substr(1, trimmed.size() - 2);
+      currentTile.atlasIndex = atlasIndex;
+      hasCurrentTile = true;
+      continue;
+    }
+
+    const std::size_t equalsPosition = trimmed.find('=');
+    if (!hasCurrentTile || equalsPosition == std::string::npos) {
+      continue;
+    }
+
+    const std::string key = trimWhitespace(trimmed.substr(0, equalsPosition));
+    std::vector<int> values = parseTomlIntegerArray(lines, lineIndex);
+    if (values.size() < 2) {
+      continue;
+    }
+
+    if (key == "pos") {
+      currentTile.position = {values[0], values[1]};
+    } else if (key == "size") {
+      currentTile.size = {values[0], values[1]};
+    } else if (key == "frame_offset") {
+      currentTile.frameOffset = {values[0], values[1]};
+    } else if (key == "frame_size") {
+      currentTile.frameSize = {values[0], values[1]};
+    }
+  }
+
+  commitTile();
+}
+
+void buildDemoTilePlacements(TileSet &tileSet) {
+  tileSet.demoTiles.clear();
+  const std::size_t tileCount =
+      std::min<std::size_t>(tileSet.tiles.size(), MaxDemoTiles);
+  if (tileCount == 0) {
+    return;
+  }
+
+  const int gridWidth = static_cast<int>(std::ceil(std::sqrt(tileCount)));
+  for (std::size_t tileIndex = 0; tileIndex < tileCount; ++tileIndex) {
+    const int x = static_cast<int>(tileIndex % gridWidth);
+    const int z = static_cast<int>(tileIndex / gridWidth);
+    tileSet.demoTiles.push_back(PlacedTile{
+        tileIndex,
+        {static_cast<float>(x) - static_cast<float>(gridWidth) * 0.5F, 0.02F,
+         static_cast<float>(z) - 3.0F}});
+  }
+}
+
+TileSet loadTileSet(const std::filesystem::path &directory) {
+  TileSet tileSet;
+  if (!std::filesystem::exists(directory)) {
+    std::cerr << "Tile texture pack directory was not found: " << directory
+              << "\n";
+    return tileSet;
+  }
+
+  std::vector<std::filesystem::path> imagePaths;
+  for (const std::filesystem::directory_entry &entry :
+       std::filesystem::directory_iterator(directory)) {
+    if (entry.is_regular_file() && entry.path().extension() == ".png") {
+      imagePaths.push_back(entry.path());
+    }
+  }
+  std::sort(imagePaths.begin(), imagePaths.end());
+
+  for (const std::filesystem::path &imagePath : imagePaths) {
+    Texture2D texture = loadTexture2D(imagePath);
+    if (!texture.isLoaded()) {
+      continue;
+    }
+
+    const std::size_t atlasIndex = tileSet.atlases.size();
+    tileSet.atlases.push_back(TileAtlas{texture, imagePath});
+
+    const std::filesystem::path metadataPath =
+        imagePath.parent_path() / (imagePath.stem().string() + ".toml");
+    parseTileMetadata(metadataPath, atlasIndex, tileSet.tiles);
+  }
+
+  buildDemoTilePlacements(tileSet);
+  std::cout << "Loaded " << tileSet.tiles.size() << " tile definition(s) from "
+            << tileSet.atlases.size() << " atlas texture(s).\n";
+  return tileSet;
+}
+
 void errorCallback(int error, const char *description) {
   std::cerr << "GLFW error " << error << ": " << description << '\n';
 }
@@ -801,6 +1078,126 @@ glm::vec3 screenDirectionToWorldDirection(float screenRight, float screenUp) {
   return worldScreenRight * screenRight + worldScreenUp * screenUp;
 }
 
+bool isIdleTurnAnimationState(CharacterAnimationState animationState) {
+  switch (animationState) {
+  case CharacterAnimationState::IdleTurn45L:
+  case CharacterAnimationState::IdleTurn45R:
+  case CharacterAnimationState::IdleTurn90L:
+  case CharacterAnimationState::IdleTurn90R:
+  case CharacterAnimationState::IdleTurn180L:
+  case CharacterAnimationState::IdleTurn180R:
+    return true;
+  default:
+    return false;
+  }
+}
+
+float signedAngleBetweenDirections(const glm::vec3 &from, const glm::vec3 &to) {
+  const glm::vec2 fromDirection = glm::normalize(glm::vec2{from.x, from.z});
+  const glm::vec2 toDirection = glm::normalize(glm::vec2{to.x, to.z});
+  const float dot =
+      std::clamp(glm::dot(fromDirection, toDirection), -1.0F, 1.0F);
+  const float cross =
+      fromDirection.y * toDirection.x - fromDirection.x * toDirection.y;
+  return std::atan2(cross, dot);
+}
+
+glm::vec3 rotateDirectionY(const glm::vec3 &direction, float radians) {
+  const float sine = std::sin(radians);
+  const float cosine = std::cos(radians);
+  return glm::normalize(glm::vec3{direction.x * cosine + direction.z * sine,
+                                  0.0F,
+                                  direction.z * cosine - direction.x * sine});
+}
+
+void turnCharacterFacingToward(Character &character,
+                               const glm::vec3 &targetFacing, float deltaTime) {
+  const float turnAngle =
+      signedAngleBetweenDirections(character.facing, targetFacing);
+  const float maxTurnRadians =
+      glm::radians(CharacterMovingTurnAngularSpeedDegrees) * deltaTime;
+  if (std::abs(turnAngle) <= maxTurnRadians) {
+    character.facing = targetFacing;
+    return;
+  }
+
+  character.facing = rotateDirectionY(
+      character.facing, std::clamp(turnAngle, -maxTurnRadians, maxTurnRadians));
+}
+
+CharacterAnimationState idleTurnAnimationStateForAngle(float signedAngle) {
+  const bool turnLeft = signedAngle > 0.0F;
+  const float angleDegrees = std::abs(glm::degrees(signedAngle));
+  if (angleDegrees < 67.5F) {
+    return turnLeft ? CharacterAnimationState::IdleTurn45L
+                    : CharacterAnimationState::IdleTurn45R;
+  }
+  if (angleDegrees < 135.0F) {
+    return turnLeft ? CharacterAnimationState::IdleTurn90L
+                    : CharacterAnimationState::IdleTurn90R;
+  }
+  return turnLeft ? CharacterAnimationState::IdleTurn180L
+                  : CharacterAnimationState::IdleTurn180R;
+}
+
+void clearCharacterAnimationBlend(Character &character) {
+  character.animationBlendTime = 0.0F;
+  character.animationBlendDuration = 0.0F;
+  character.animationBlendSourceTime = character.animationTime;
+  character.animationBlendSourceState = character.animationState;
+}
+
+void beginCharacterAnimationBlend(Character &character,
+                                  CharacterAnimationState nextState,
+                                  float nextAnimationTime,
+                                  float blendDuration) {
+  if (blendDuration <= std::numeric_limits<float>::epsilon()) {
+    character.animationState = nextState;
+    character.animationTime = nextAnimationTime;
+    clearCharacterAnimationBlend(character);
+    return;
+  }
+
+  character.animationBlendSourceState = character.animationState;
+  character.animationBlendSourceTime = character.animationTime;
+  character.animationBlendTime = 0.0F;
+  character.animationBlendDuration = blendDuration;
+  character.animationState = nextState;
+  character.animationTime = nextAnimationTime;
+}
+
+void advanceCharacterAnimationBlend(Character &character, float deltaTime) {
+  if (!character.isAnimationBlending()) {
+    return;
+  }
+
+  character.animationBlendTime =
+      std::min(character.animationBlendTime + deltaTime,
+               character.animationBlendDuration);
+}
+
+float smoothStep(float progress) {
+  const float clampedProgress = std::clamp(progress, 0.0F, 1.0F);
+  return clampedProgress * clampedProgress * (3.0F - 2.0F * clampedProgress);
+}
+
+float idleToWalkAccelerationScale(const Character &character,
+                                  const AnimationClip &idleToWalkAnimation) {
+  if (character.animationState != CharacterAnimationState::IdleToWalk) {
+    return 1.0F;
+  }
+
+  const float transitionDuration =
+      animationDurationSeconds(idleToWalkAnimation);
+  if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
+    return 1.0F;
+  }
+
+  const float transitionProgress = character.animationTime / transitionDuration;
+  return glm::mix(CharacterStartAccelerationMinScale, 1.0F,
+                  smoothStep(transitionProgress));
+}
+
 float walkToStopCoastScale(const Character &character,
                            const AnimationClip &walkToStopAnimation) {
   if (character.animationState != CharacterAnimationState::WalkToStop) {
@@ -820,6 +1217,36 @@ float walkToStopCoastScale(const Character &character,
          remainingTransition;
 }
 
+const AnimationClip &
+idleTurnAnimationForState(CharacterAnimationState animationState,
+                          const CharacterAnimationClips &animations);
+
+const AnimationClip &
+clipForAnimationState(CharacterAnimationState animationState,
+                      const CharacterAnimationClips &animations);
+
+float idleTurnMovementScale(const Character &character,
+                            const CharacterAnimationClips &animations) {
+  if (!isIdleTurnAnimationState(character.animationState)) {
+    return 1.0F;
+  }
+
+  const float turnDuration = animationDurationSeconds(
+      idleTurnAnimationForState(character.animationState, animations));
+  if (turnDuration <= std::numeric_limits<float>::epsilon()) {
+    return 1.0F;
+  }
+
+  const float turnProgress =
+      std::clamp(character.animationTime / turnDuration, 0.0F, 1.0F);
+  if (turnProgress <= CharacterIdleTurnMoveStartProgress) {
+    return 0.0F;
+  }
+
+  return smoothStep((turnProgress - CharacterIdleTurnMoveStartProgress) /
+                    (1.0F - CharacterIdleTurnMoveStartProgress));
+}
+
 float characterAnimationPlaybackSpeed(const Character &character,
                                       bool wantsToMove) {
   const bool isTransitioning =
@@ -832,9 +1259,66 @@ float characterAnimationPlaybackSpeed(const Character &character,
 }
 
 void updateCharacterAnimationState(Character &character, bool wantsToMove,
+                                   const glm::vec3 &moveDirection,
                                    float deltaTime,
-                                   const AnimationClip &idleToWalkAnimation,
-                                   const AnimationClip &walkToStopAnimation) {
+                                   const CharacterAnimationClips &animations) {
+  advanceCharacterAnimationBlend(character, deltaTime);
+
+  if (isIdleTurnAnimationState(character.animationState)) {
+    if (wantsToMove) {
+      const float retargetAngle =
+          signedAngleBetweenDirections(character.facing, moveDirection);
+      if (std::abs(glm::degrees(retargetAngle)) <
+          CharacterIdleTurnThresholdDegrees) {
+        clearCharacterAnimationBlend(character);
+        character.facing = moveDirection;
+        character.animationState = CharacterAnimationState::IdleToWalk;
+        character.animationTime = 0.0F;
+        return;
+      }
+
+      const CharacterAnimationState retargetState =
+          idleTurnAnimationStateForAngle(retargetAngle);
+      if (retargetState != character.animationState &&
+          idleTurnAnimationForState(retargetState, animations).isLoaded()) {
+        character.animationState = retargetState;
+        character.animationTime = 0.0F;
+        character.turnStartFacing = character.facing;
+      }
+      character.turnTargetFacing = moveDirection;
+      character.turnAngleRadians = retargetAngle;
+    }
+
+    const AnimationClip &turnAnimation =
+        idleTurnAnimationForState(character.animationState, animations);
+    const float turnDuration = animationDurationSeconds(turnAnimation);
+    if (turnDuration <= std::numeric_limits<float>::epsilon()) {
+      clearCharacterAnimationBlend(character);
+      character.facing = character.turnTargetFacing;
+      character.animationState = wantsToMove
+                                     ? CharacterAnimationState::IdleToWalk
+                                     : CharacterAnimationState::Idle;
+      character.animationTime = 0.0F;
+      return;
+    }
+
+    character.animationTime += deltaTime;
+
+    if (character.animationTime >= turnDuration) {
+      const bool startedWalkingDuringTurn = character.isMoving && wantsToMove;
+      clearCharacterAnimationBlend(character);
+      character.facing = character.turnTargetFacing;
+      character.animationState =
+          wantsToMove
+              ? (startedWalkingDuringTurn ? CharacterAnimationState::Walk
+                                          : CharacterAnimationState::IdleToWalk)
+              : CharacterAnimationState::Idle;
+      character.animationTime = 0.0F;
+      character.isMoving = wantsToMove;
+    }
+    return;
+  }
+
   if (!wantsToMove) {
     character.isMoving = false;
     if (character.animationState == CharacterAnimationState::Idle) {
@@ -843,13 +1327,15 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
     }
 
     if (character.animationState != CharacterAnimationState::WalkToStop) {
+      clearCharacterAnimationBlend(character);
       character.animationState = CharacterAnimationState::WalkToStop;
       character.animationTime = 0.0F;
     }
 
     const float transitionDuration =
-        animationDurationSeconds(walkToStopAnimation);
+        animationDurationSeconds(animations.walkToStop);
     if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
+      clearCharacterAnimationBlend(character);
       character.animationState = CharacterAnimationState::Idle;
       character.animationTime = 0.0F;
       return;
@@ -857,10 +1343,31 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
 
     character.animationTime += deltaTime;
     if (character.animationTime >= transitionDuration) {
-      character.animationState = CharacterAnimationState::Idle;
-      character.animationTime = 0.0F;
+      character.animationTime = transitionDuration;
+      beginCharacterAnimationBlend(character, CharacterAnimationState::Idle,
+                                   0.0F, CharacterStopToIdleBlendDuration);
     }
     return;
+  }
+
+  if (character.animationState == CharacterAnimationState::Idle) {
+    const float turnAngle =
+        signedAngleBetweenDirections(character.facing, moveDirection);
+    if (std::abs(glm::degrees(turnAngle)) >=
+        CharacterIdleTurnThresholdDegrees) {
+      const CharacterAnimationState turnState =
+          idleTurnAnimationStateForAngle(turnAngle);
+      if (idleTurnAnimationForState(turnState, animations).isLoaded()) {
+        clearCharacterAnimationBlend(character);
+        character.animationState = turnState;
+        character.animationTime = 0.0F;
+        character.turnStartFacing = character.facing;
+        character.turnTargetFacing = moveDirection;
+        character.turnAngleRadians = turnAngle;
+        character.isMoving = false;
+        return;
+      }
+    }
   }
 
   const bool startedMoving = !character.isMoving;
@@ -868,14 +1375,16 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
   if (startedMoving ||
       character.animationState == CharacterAnimationState::Idle ||
       character.animationState == CharacterAnimationState::WalkToStop) {
+    clearCharacterAnimationBlend(character);
     character.animationState = CharacterAnimationState::IdleToWalk;
     character.animationTime = 0.0F;
   }
 
   if (character.animationState == CharacterAnimationState::IdleToWalk) {
     const float transitionDuration =
-        animationDurationSeconds(idleToWalkAnimation);
+        animationDurationSeconds(animations.idleToWalk);
     if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
+      clearCharacterAnimationBlend(character);
       character.animationState = CharacterAnimationState::Walk;
       character.animationTime = 0.0F;
       return;
@@ -883,6 +1392,7 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
 
     character.animationTime += deltaTime;
     if (character.animationTime >= transitionDuration) {
+      clearCharacterAnimationBlend(character);
       character.animationState = CharacterAnimationState::Walk;
       character.animationTime =
           std::fmod(character.animationTime, transitionDuration);
@@ -894,158 +1404,62 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
 }
 
 void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
-                     const AnimationClip &idleToWalkAnimation,
-                     const AnimationClip &walkToStopAnimation) {
+                     const CharacterAnimationClips &animations) {
   if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
     glfwSetWindowShouldClose(window, GLFW_TRUE);
   }
 
-  const float transitionDuration =
-      animationDurationSeconds(walkToStopAnimation);
-  if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
-    return 0.0F;
+  glm::vec3 movement{0.0F, 0.0F, 0.0F};
+  if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+    movement += screenDirectionToWorldDirection(0.0F, 1.0F);
   }
-
-  const float transitionProgress = std::clamp(
-      character.animationTime / transitionDuration, 0.0F, 1.0F);
-  const float remainingTransition = 1.0F - transitionProgress;
-  return CharacterStopCoastSpeedScale * remainingTransition *
-         remainingTransition;
-}
-
-float characterAnimationPlaybackSpeed(const Character &character,
-                                      bool wantsToMove) {
-  const bool isTransitioning =
-      (wantsToMove &&
-       character.animationState != CharacterAnimationState::Walk) ||
-      (!wantsToMove &&
-       character.animationState != CharacterAnimationState::Idle);
-  return isTransitioning ? CharacterTransitionAnimationPlaybackSpeed
-                         : CharacterAnimationPlaybackSpeed;
-}
-
-void updateCharacterAnimationState(Character &character, bool wantsToMove,
-                                   float deltaTime,
-                                   const AnimationClip &idleToWalkAnimation,
-                                   const AnimationClip &walkToStopAnimation) {
-  if (!wantsToMove) {
-    character.isMoving = false;
-    if (character.animationState == CharacterAnimationState::Idle) {
-      character.animationTime += deltaTime;
-      return;
-    }
-
-    if (character.animationState != CharacterAnimationState::WalkToStop) {
-      character.animationState = CharacterAnimationState::WalkToStop;
-      character.animationTime = 0.0F;
-    }
-
-    const float transitionDuration =
-        animationDurationSeconds(walkToStopAnimation);
-    if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
-      character.animationState = CharacterAnimationState::Idle;
-      character.animationTime = 0.0F;
-      return;
-    }
-
-    character.animationTime += deltaTime;
-    if (character.animationTime >= transitionDuration) {
-      character.animationState = CharacterAnimationState::Idle;
-      character.animationTime = 0.0F;
-    }
-    return;
+  if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+    movement += screenDirectionToWorldDirection(0.0F, -1.0F);
   }
-
-  const bool startedMoving = !character.isMoving;
-  character.isMoving = true;
-  if (startedMoving ||
-      character.animationState == CharacterAnimationState::Idle ||
-      character.animationState == CharacterAnimationState::WalkToStop) {
-    character.animationState = CharacterAnimationState::IdleToWalk;
-    character.animationTime = 0.0F;
+  if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+    movement += screenDirectionToWorldDirection(1.0F, 0.0F);
+  }
+  if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+    movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
   }
 
   const bool wantsToMove = glm::length(movement) > 0.0F;
+  const glm::vec3 moveDirection =
+      wantsToMove ? glm::normalize(movement) : glm::vec3{0.0F, 0.0F, 0.0F};
+
+  updateCharacterAnimationState(
+      input.character, wantsToMove, moveDirection,
+      deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
+      animations);
+
   if (wantsToMove) {
-    const glm::vec3 direction = glm::normalize(movement);
-    input.character.position += direction * CharacterMoveSpeed * deltaTime;
-    input.character.facing = direction;
-  }
-
-  updateCharacterAnimationState(
-      input.character, wantsToMove,
-      deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
-      idleToWalkAnimation, walkToStopAnimation);
-
-  if (!wantsToMove) {
-    const float coastScale =
-        walkToStopCoastScale(input.character, walkToStopAnimation);
-    if (coastScale > 0.0F) {
-      input.character.position += input.character.facing * CharacterMoveSpeed *
-                                  coastScale * deltaTime;
+    const bool isTurningInPlace =
+        isIdleTurnAnimationState(input.character.animationState);
+    const float turnMovementScale =
+        idleTurnMovementScale(input.character, animations);
+    if (turnMovementScale > 0.0F) {
+      const float accelerationScale =
+          idleToWalkAccelerationScale(input.character, animations.idleToWalk);
+      input.character.position += moveDirection * CharacterMoveSpeed *
+                                  accelerationScale * turnMovementScale *
+                                  deltaTime;
+      input.character.isMoving = true;
+    }
+    if (!isTurningInPlace) {
+      turnCharacterFacingToward(input.character, moveDirection, deltaTime);
     }
   }
 
-  updateCharacterAnimationState(
-      input.character, wantsToMove,
-      deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
-      idleToWalkAnimation, walkToStopAnimation);
-
   if (!wantsToMove) {
     const float coastScale =
-        walkToStopCoastScale(input.character, walkToStopAnimation);
+        walkToStopCoastScale(input.character, animations.walkToStop);
     if (coastScale > 0.0F) {
-      input.character.position += input.character.facing * CharacterMoveSpeed *
-                                  coastScale * deltaTime;
+      input.character.position +=
+          input.character.facing * CharacterMoveSpeed * coastScale * deltaTime;
     }
   }
 
-  character.animationTime += deltaTime;
-}
-
-void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
-    const AnimationClip &idleToWalkAnimation,
-    const AnimationClip &walkToStopAnimation) {
-if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-glfwSetWindowShouldClose(window, GLFW_TRUE);
-}
-
-glm::vec3 movement{0.0F, 0.0F, 0.0F};
-if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-movement += screenDirectionToWorldDirection(0.0F, 1.0F);
-}
-if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-movement += screenDirectionToWorldDirection(0.0F, -1.0F);
-}
-if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-movement += screenDirectionToWorldDirection(1.0F, 0.0F);
-}
-if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
-}
-
-const bool wantsToMove = glm::length(movement) > 0.0F;
-if (wantsToMove) {
-const glm::vec3 direction = glm::normalize(movement);
-input.character.position += direction * CharacterMoveSpeed * deltaTime;
-input.character.facing = direction;
-}
-
-updateCharacterAnimationState(
-input.character, wantsToMove,
-deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
-idleToWalkAnimation, walkToStopAnimation);
-
-if (!wantsToMove) {
-const float coastScale =
-walkToStopCoastScale(input.character, walkToStopAnimation);
-if (coastScale > 0.0F) {
-input.character.position += input.character.facing * CharacterMoveSpeed *
-                 coastScale * deltaTime;
-}
-}
-
-input.camera.target = input.character.position;
+  input.camera.target = input.character.position;
 }
 
 void loadMatrix(GLenum matrixMode, const glm::mat4 &matrix) {
@@ -1164,7 +1578,8 @@ float interpolationFactor(double animationTime, double startTime,
   if (duration <= std::numeric_limits<double>::epsilon()) {
     return 0.0F;
   }
-  return static_cast<float>((animationTime - startTime) / duration);
+  return std::clamp(static_cast<float>((animationTime - startTime) / duration),
+                    0.0F, 1.0F);
 }
 
 glm::vec3 sampleVectorKeys(double animationTime,
@@ -1323,7 +1738,8 @@ void computeBoneMatricesRecursive(const SkeletonNode &node,
 
 std::vector<glm::mat4> computeBoneMatrices(const Model &model,
                                            const AnimationClip &animation,
-                                           float elapsedSeconds) {
+                                           float elapsedSeconds,
+                                           bool shouldLoop = true) {
   std::vector<glm::mat4> boneMatrices(model.bones.size(), glm::mat4{1.0F});
   if (!model.hasSkeleton() || !animation.isLoaded()) {
     return boneMatrices;
@@ -1333,7 +1749,9 @@ std::vector<glm::mat4> computeBoneMatrices(const Model &model,
       animation.ticksPerSecond > 0.0 ? animation.ticksPerSecond : 24.0;
   const double timeInTicks =
       static_cast<double>(elapsedSeconds) * ticksPerSecond;
-  const double animationTime = std::fmod(timeInTicks, animation.durationTicks);
+  const double animationTime =
+      shouldLoop ? std::fmod(timeInTicks, animation.durationTicks)
+                 : std::clamp(timeInTicks, 0.0, animation.durationTicks);
   computeBoneMatricesRecursive(model.rootNode, glm::mat4{1.0F}, model,
                                animation, animationTime, boneMatrices);
   return boneMatrices;
@@ -1368,11 +1786,9 @@ Vertex animatedVertex(const Vertex &vertex,
   return result;
 }
 
-void drawModel(const Model &model, const AnimationClip &animation,
-               float animationTime, const Texture2D &texture) {
-  const std::vector<glm::mat4> boneMatrices =
-      computeBoneMatrices(model, animation, animationTime);
-
+void drawModelWithBoneMatrices(const Model &model,
+                               const std::vector<glm::mat4> &boneMatrices,
+                               const Texture2D &texture) {
   if (texture.isLoaded()) {
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
@@ -1412,6 +1828,119 @@ void drawModel(const Model &model, const AnimationClip &animation,
   }
 }
 
+bool isLoopingAnimationState(CharacterAnimationState animationState) {
+  return animationState == CharacterAnimationState::Idle ||
+         animationState == CharacterAnimationState::Walk;
+}
+
+float characterAnimationBlendFactor(const Character &character) {
+  if (!character.isAnimationBlending()) {
+    return 1.0F;
+  }
+
+  return smoothStep(character.animationBlendTime /
+                    character.animationBlendDuration);
+}
+
+std::vector<glm::mat4>
+blendBoneMatrices(const std::vector<glm::mat4> &sourceBoneMatrices,
+                  const std::vector<glm::mat4> &targetBoneMatrices,
+                  float blendFactor) {
+  if (sourceBoneMatrices.size() != targetBoneMatrices.size()) {
+    return targetBoneMatrices;
+  }
+
+  std::vector<glm::mat4> blendedBoneMatrices;
+  blendedBoneMatrices.reserve(targetBoneMatrices.size());
+  for (std::size_t boneIndex = 0; boneIndex < targetBoneMatrices.size();
+       ++boneIndex) {
+    blendedBoneMatrices.push_back(sourceBoneMatrices[boneIndex] *
+                                      (1.0F - blendFactor) +
+                                  targetBoneMatrices[boneIndex] * blendFactor);
+  }
+  return blendedBoneMatrices;
+}
+
+void drawTileSprite(const TileSet &tileSet, const TileDefinition &tile,
+                    const glm::vec3 &worldPosition, const Camera &camera) {
+  if (tile.atlasIndex >= tileSet.atlases.size()) {
+    return;
+  }
+
+  const TileAtlas &atlas = tileSet.atlases[tile.atlasIndex];
+  if (!atlas.texture.isLoaded()) {
+    return;
+  }
+
+  const glm::vec3 screenRight = camera.right();
+  const glm::vec3 screenUp =
+      glm::normalize(glm::cross(screenRight, camera.forward()));
+  const float left = (static_cast<float>(tile.frameOffset.x) -
+                      static_cast<float>(tile.frameSize.x) * 0.5F) *
+                     TileSpriteWorldScale;
+  const float right =
+      left + static_cast<float>(tile.size.x) * TileSpriteWorldScale;
+  const float top =
+      (static_cast<float>(tile.frameSize.y - tile.frameOffset.y)) *
+      TileSpriteWorldScale;
+  const float bottom =
+      top - static_cast<float>(tile.size.y) * TileSpriteWorldScale;
+
+  const float u0 = static_cast<float>(tile.position.x) /
+                   static_cast<float>(atlas.texture.width);
+  const float u1 = static_cast<float>(tile.position.x + tile.size.x) /
+                   static_cast<float>(atlas.texture.width);
+  const float v0 = 1.0F - static_cast<float>(tile.position.y + tile.size.y) /
+                              static_cast<float>(atlas.texture.height);
+  const float v1 = 1.0F - static_cast<float>(tile.position.y) /
+                              static_cast<float>(atlas.texture.height);
+
+  glBindTexture(GL_TEXTURE_2D, atlas.texture.id);
+  glBegin(GL_QUADS);
+  glTexCoord2f(u0, v0);
+  const glm::vec3 bottomLeft =
+      worldPosition + screenRight * left + screenUp * bottom;
+  glVertex3f(bottomLeft.x, bottomLeft.y, bottomLeft.z);
+  glTexCoord2f(u1, v0);
+  const glm::vec3 bottomRight =
+      worldPosition + screenRight * right + screenUp * bottom;
+  glVertex3f(bottomRight.x, bottomRight.y, bottomRight.z);
+  glTexCoord2f(u1, v1);
+  const glm::vec3 topRight =
+      worldPosition + screenRight * right + screenUp * top;
+  glVertex3f(topRight.x, topRight.y, topRight.z);
+  glTexCoord2f(u0, v1);
+  const glm::vec3 topLeft = worldPosition + screenRight * left + screenUp * top;
+  glVertex3f(topLeft.x, topLeft.y, topLeft.z);
+  glEnd();
+}
+
+void drawTileSet(const TileSet &tileSet, const Camera &camera) {
+  if (!tileSet.isLoaded()) {
+    return;
+  }
+
+  glEnable(GL_TEXTURE_2D);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glEnable(GL_ALPHA_TEST);
+  glAlphaFunc(GL_GREATER, 0.01F);
+  glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
+
+  for (const PlacedTile &placedTile : tileSet.demoTiles) {
+    if (placedTile.tileIndex >= tileSet.tiles.size()) {
+      continue;
+    }
+    drawTileSprite(tileSet, tileSet.tiles[placedTile.tileIndex],
+                   placedTile.position, camera);
+  }
+
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glDisable(GL_ALPHA_TEST);
+  glDisable(GL_BLEND);
+  glDisable(GL_TEXTURE_2D);
+}
+
 void configureOpenGl() {
   glEnable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
@@ -1421,28 +1950,100 @@ void configureOpenGl() {
 }
 
 const AnimationClip &
-activeAnimationForCharacter(const Character &character,
-                            const AnimationClip &idleAnimation,
-                            const AnimationClip &idleToWalkAnimation,
-                            const AnimationClip &walkAnimation,
-                            const AnimationClip &walkToStopAnimation) {
-  switch (character.animationState) {
+idleTurnAnimationForState(CharacterAnimationState animationState,
+                          const CharacterAnimationClips &animations) {
+  switch (animationState) {
+  // The 45- and 90-degree source clips are named opposite to the direction
+  // they play.
+  case CharacterAnimationState::IdleTurn45L:
+    return animations.idleTurn45R;
+  case CharacterAnimationState::IdleTurn45R:
+    return animations.idleTurn45L;
+  case CharacterAnimationState::IdleTurn90L:
+    return animations.idleTurn90R;
+  case CharacterAnimationState::IdleTurn90R:
+    return animations.idleTurn90L;
+  case CharacterAnimationState::IdleTurn180L:
+    return animations.idleTurn180L;
+  case CharacterAnimationState::IdleTurn180R:
+    return animations.idleTurn180R;
+  default:
+    return animations.idle;
+  }
+}
+
+const AnimationClip &
+clipForAnimationState(CharacterAnimationState animationState,
+                      const CharacterAnimationClips &animations) {
+  switch (animationState) {
   case CharacterAnimationState::Idle:
-    return idleAnimation;
+    return animations.idle;
   case CharacterAnimationState::IdleToWalk:
-    return idleToWalkAnimation.isLoaded() ? idleToWalkAnimation : walkAnimation;
+    return animations.idleToWalk.isLoaded() ? animations.idleToWalk
+                                            : animations.walk;
   case CharacterAnimationState::Walk:
-    return walkAnimation;
+    return animations.walk;
   case CharacterAnimationState::WalkToStop:
-    return walkToStopAnimation.isLoaded() ? walkToStopAnimation : idleAnimation;
+    return animations.walkToStop.isLoaded() ? animations.walkToStop
+                                            : animations.idle;
+  // The 45- and 90-degree source clips are named opposite to the direction
+  // they play.
+  case CharacterAnimationState::IdleTurn45L:
+    return animations.idleTurn45R.isLoaded() ? animations.idleTurn45R
+                                             : animations.idle;
+  case CharacterAnimationState::IdleTurn45R:
+    return animations.idleTurn45L.isLoaded() ? animations.idleTurn45L
+                                             : animations.idle;
+  case CharacterAnimationState::IdleTurn90L:
+    return animations.idleTurn90R.isLoaded() ? animations.idleTurn90R
+                                             : animations.idle;
+  case CharacterAnimationState::IdleTurn90R:
+    return animations.idleTurn90L.isLoaded() ? animations.idleTurn90L
+                                             : animations.idle;
+  case CharacterAnimationState::IdleTurn180L:
+    return animations.idleTurn180L.isLoaded() ? animations.idleTurn180L
+                                              : animations.idle;
+  case CharacterAnimationState::IdleTurn180R:
+    return animations.idleTurn180R.isLoaded() ? animations.idleTurn180R
+                                              : animations.idle;
   }
 
-  return idleAnimation;
+  return animations.idle;
+}
+
+const AnimationClip &
+activeAnimationForCharacter(const Character &character,
+                            const CharacterAnimationClips &animations) {
+  return clipForAnimationState(character.animationState, animations);
+}
+
+std::vector<glm::mat4>
+boneMatricesForCharacter(const Character &character, const Model &bodyModel,
+                         const CharacterAnimationClips &animations) {
+  const AnimationClip &activeAnimation =
+      activeAnimationForCharacter(character, animations);
+  std::vector<glm::mat4> activeBoneMatrices =
+      computeBoneMatrices(bodyModel, activeAnimation, character.animationTime,
+                          isLoopingAnimationState(character.animationState));
+
+  if (!character.isAnimationBlending()) {
+    return activeBoneMatrices;
+  }
+
+  const AnimationClip &sourceAnimation =
+      clipForAnimationState(character.animationBlendSourceState, animations);
+  const std::vector<glm::mat4> sourceBoneMatrices = computeBoneMatrices(
+      bodyModel, sourceAnimation, character.animationBlendSourceTime,
+      isLoopingAnimationState(character.animationBlendSourceState));
+
+  return blendBoneMatrices(sourceBoneMatrices, activeBoneMatrices,
+                           characterAnimationBlendFactor(character));
 }
 
 void renderScene(const Camera &camera, const Character &character,
                  const Model &bodyModel, const Texture2D &bodyTexture,
-                 const AnimationClip &activeAnimation, int framebufferWidth,
+                 const CharacterAnimationClips &animations,
+                 const TileSet &tileSet, int framebufferWidth,
                  int framebufferHeight) {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -1457,6 +2058,7 @@ void renderScene(const Camera &camera, const Character &character,
   loadMatrix(GL_MODELVIEW, camera.viewMatrix());
 
   drawGroundGrid();
+  drawTileSet(tileSet, camera);
 
   glPushMatrix();
   glTranslatef(character.position.x, character.position.y,
@@ -1464,7 +2066,9 @@ void renderScene(const Camera &camera, const Character &character,
   glRotatef(rotationDegreesForFacing(character.facing), 0.0F, 1.0F, 0.0F);
   if (bodyModel.isLoaded()) {
     glScalef(0.01F, 0.01F, 0.01F);
-    drawModel(bodyModel, activeAnimation, character.animationTime, bodyTexture);
+    drawModelWithBoneMatrices(
+        bodyModel, boneMatricesForCharacter(character, bodyModel, animations),
+        bodyTexture);
   } else {
     drawCube();
   }
@@ -1511,18 +2115,37 @@ int main() {
 
   const Model bodyModel = loadModel(BodyModelPath);
   const Texture2D bodyTexture = loadTexture2D(BodyTexturePath);
-  const AnimationClip idleAnimation =
-      loadAnimationClip(IdleAnimationPath, "Bob_Idle");
-  const AnimationClip idleToWalkAnimation =
+  const TileSet tileSet = loadTileSet(Tiles1xTexturePackPath);
+  CharacterAnimationClips animations;
+  animations.idle = loadAnimationClip(IdleAnimationPath, "Bob_Idle");
+  animations.idleToWalk =
       loadAnimationClip(IdleToWalkAnimationPath, "Bob_IdleToWalk", false, true);
-  const AnimationClip walkAnimation =
+  animations.walk =
       loadAnimationClip(WalkAnimationPath, "Bob_Walk", true, true);
-  const AnimationClip walkToStopAnimation =
+  animations.walkToStop =
       loadAnimationClip(WalkToStopAnimationPath, "Bob_WalkToStop", true, true);
-  printAnimationMatchReport(bodyModel, idleAnimation);
-  printAnimationMatchReport(bodyModel, idleToWalkAnimation);
-  printAnimationMatchReport(bodyModel, walkAnimation);
-  printAnimationMatchReport(bodyModel, walkToStopAnimation);
+  animations.idleTurn45L = loadAnimationClip(
+      IdleTurn45LAnimationPath, "Bob_IdleTurn45L.001", false, true);
+  animations.idleTurn45R = loadAnimationClip(
+      IdleTurn45RAnimationPath, "Bob_IdleTurn45R.002", false, true);
+  animations.idleTurn90L = loadAnimationClip(
+      IdleTurn90LAnimationPath, "Bob_IdleTurn90L.003", false, true);
+  animations.idleTurn90R = loadAnimationClip(
+      IdleTurn90RAnimationPath, "Bob_IdleTurn90R.004", false, true);
+  animations.idleTurn180L = loadAnimationClip(
+      IdleTurn180LAnimationPath, "Bob_IdleTurn180L.005", false, true);
+  animations.idleTurn180R = loadAnimationClip(
+      IdleTurn180RAnimationPath, "Bob_IdleTurn180R.006", false, true);
+  printAnimationMatchReport(bodyModel, animations.idle);
+  printAnimationMatchReport(bodyModel, animations.idleToWalk);
+  printAnimationMatchReport(bodyModel, animations.walk);
+  printAnimationMatchReport(bodyModel, animations.walkToStop);
+  printAnimationMatchReport(bodyModel, animations.idleTurn45L);
+  printAnimationMatchReport(bodyModel, animations.idleTurn45R);
+  printAnimationMatchReport(bodyModel, animations.idleTurn90L);
+  printAnimationMatchReport(bodyModel, animations.idleTurn90R);
+  printAnimationMatchReport(bodyModel, animations.idleTurn180L);
+  printAnimationMatchReport(bodyModel, animations.idleTurn180R);
   configureOpenGl();
 
   float previousTime = static_cast<float>(glfwGetTime());
@@ -1531,17 +2154,13 @@ int main() {
     const float deltaTime = currentTime - previousTime;
     previousTime = currentTime;
 
-    processKeyboard(window, input, deltaTime, idleToWalkAnimation,
-                    walkToStopAnimation);
+    processKeyboard(window, input, deltaTime, animations);
 
     int framebufferWidth = 0;
     int framebufferHeight = 0;
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
-    const AnimationClip &activeAnimation = activeAnimationForCharacter(
-        input.character, idleAnimation, idleToWalkAnimation, walkAnimation,
-        walkToStopAnimation);
     renderScene(input.camera, input.character, bodyModel, bodyTexture,
-                activeAnimation, framebufferWidth, framebufferHeight);
+                animations, tileSet, framebufferWidth, framebufferHeight);
 
     glfwSwapBuffers(window);
     glfwPollEvents();
