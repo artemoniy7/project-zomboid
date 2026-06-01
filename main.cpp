@@ -34,6 +34,7 @@ constexpr int WindowHeight = 720;
 constexpr float CharacterMoveSpeed = 3.2F;
 constexpr float CharacterAnimationPlaybackSpeed = 0.85F;
 constexpr float CharacterTransitionAnimationPlaybackSpeed = 1.35F;
+constexpr float CharacterStopToIdleBlendDuration = 0.18F;
 constexpr float CharacterStopCoastSpeedScale = 0.55F;
 constexpr float ZoomSpeed = 1.25F;
 constexpr float MinCameraDistance = 4.0F;
@@ -176,8 +177,18 @@ struct Character {
   glm::vec3 position{0.0F, 0.0F, 0.0F};
   glm::vec3 facing{0.0F, 0.0F, 1.0F};
   float animationTime = 0.0F;
+  float animationBlendTime = 0.0F;
+  float animationBlendDuration = 0.0F;
+  float animationBlendSourceTime = 0.0F;
   bool isMoving = false;
   CharacterAnimationState animationState = CharacterAnimationState::Idle;
+  CharacterAnimationState animationBlendSourceState =
+      CharacterAnimationState::Idle;
+
+  [[nodiscard]] bool isAnimationBlending() const {
+    return animationBlendDuration > std::numeric_limits<float>::epsilon() &&
+           animationBlendTime < animationBlendDuration;
+  }
 };
 
 struct InputState {
@@ -801,6 +812,42 @@ glm::vec3 screenDirectionToWorldDirection(float screenRight, float screenUp) {
   return worldScreenRight * screenRight + worldScreenUp * screenUp;
 }
 
+void clearCharacterAnimationBlend(Character &character) {
+  character.animationBlendTime = 0.0F;
+  character.animationBlendDuration = 0.0F;
+  character.animationBlendSourceTime = character.animationTime;
+  character.animationBlendSourceState = character.animationState;
+}
+
+void beginCharacterAnimationBlend(Character &character,
+                                  CharacterAnimationState nextState,
+                                  float nextAnimationTime,
+                                  float blendDuration) {
+  if (blendDuration <= std::numeric_limits<float>::epsilon()) {
+    character.animationState = nextState;
+    character.animationTime = nextAnimationTime;
+    clearCharacterAnimationBlend(character);
+    return;
+  }
+
+  character.animationBlendSourceState = character.animationState;
+  character.animationBlendSourceTime = character.animationTime;
+  character.animationBlendTime = 0.0F;
+  character.animationBlendDuration = blendDuration;
+  character.animationState = nextState;
+  character.animationTime = nextAnimationTime;
+}
+
+void advanceCharacterAnimationBlend(Character &character, float deltaTime) {
+  if (!character.isAnimationBlending()) {
+    return;
+  }
+
+  character.animationBlendTime =
+      std::min(character.animationBlendTime + deltaTime,
+               character.animationBlendDuration);
+}
+
 float walkToStopCoastScale(const Character &character,
                            const AnimationClip &walkToStopAnimation) {
   if (character.animationState != CharacterAnimationState::WalkToStop) {
@@ -835,6 +882,8 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
                                    float deltaTime,
                                    const AnimationClip &idleToWalkAnimation,
                                    const AnimationClip &walkToStopAnimation) {
+  advanceCharacterAnimationBlend(character, deltaTime);
+
   if (!wantsToMove) {
     character.isMoving = false;
     if (character.animationState == CharacterAnimationState::Idle) {
@@ -843,6 +892,7 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
     }
 
     if (character.animationState != CharacterAnimationState::WalkToStop) {
+      clearCharacterAnimationBlend(character);
       character.animationState = CharacterAnimationState::WalkToStop;
       character.animationTime = 0.0F;
     }
@@ -850,6 +900,7 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
     const float transitionDuration =
         animationDurationSeconds(walkToStopAnimation);
     if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
+      clearCharacterAnimationBlend(character);
       character.animationState = CharacterAnimationState::Idle;
       character.animationTime = 0.0F;
       return;
@@ -857,8 +908,9 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
 
     character.animationTime += deltaTime;
     if (character.animationTime >= transitionDuration) {
-      character.animationState = CharacterAnimationState::Idle;
-      character.animationTime = 0.0F;
+      character.animationTime = transitionDuration;
+      beginCharacterAnimationBlend(character, CharacterAnimationState::Idle,
+                                   0.0F, CharacterStopToIdleBlendDuration);
     }
     return;
   }
@@ -868,6 +920,7 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
   if (startedMoving ||
       character.animationState == CharacterAnimationState::Idle ||
       character.animationState == CharacterAnimationState::WalkToStop) {
+    clearCharacterAnimationBlend(character);
     character.animationState = CharacterAnimationState::IdleToWalk;
     character.animationTime = 0.0F;
   }
@@ -876,6 +929,7 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
     const float transitionDuration =
         animationDurationSeconds(idleToWalkAnimation);
     if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
+      clearCharacterAnimationBlend(character);
       character.animationState = CharacterAnimationState::Walk;
       character.animationTime = 0.0F;
       return;
@@ -883,6 +937,7 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
 
     character.animationTime += deltaTime;
     if (character.animationTime >= transitionDuration) {
+      clearCharacterAnimationBlend(character);
       character.animationState = CharacterAnimationState::Walk;
       character.animationTime =
           std::fmod(character.animationTime, transitionDuration);
@@ -900,69 +955,18 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     glfwSetWindowShouldClose(window, GLFW_TRUE);
   }
 
-  const float transitionDuration =
-      animationDurationSeconds(walkToStopAnimation);
-  if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
-    return 0.0F;
+  glm::vec3 movement{0.0F, 0.0F, 0.0F};
+  if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+    movement += screenDirectionToWorldDirection(0.0F, 1.0F);
   }
-
-  const float transitionProgress = std::clamp(
-      character.animationTime / transitionDuration, 0.0F, 1.0F);
-  const float remainingTransition = 1.0F - transitionProgress;
-  return CharacterStopCoastSpeedScale * remainingTransition *
-         remainingTransition;
-}
-
-float characterAnimationPlaybackSpeed(const Character &character,
-                                      bool wantsToMove) {
-  const bool isTransitioning =
-      (wantsToMove &&
-       character.animationState != CharacterAnimationState::Walk) ||
-      (!wantsToMove &&
-       character.animationState != CharacterAnimationState::Idle);
-  return isTransitioning ? CharacterTransitionAnimationPlaybackSpeed
-                         : CharacterAnimationPlaybackSpeed;
-}
-
-void updateCharacterAnimationState(Character &character, bool wantsToMove,
-                                   float deltaTime,
-                                   const AnimationClip &idleToWalkAnimation,
-                                   const AnimationClip &walkToStopAnimation) {
-  if (!wantsToMove) {
-    character.isMoving = false;
-    if (character.animationState == CharacterAnimationState::Idle) {
-      character.animationTime += deltaTime;
-      return;
-    }
-
-    if (character.animationState != CharacterAnimationState::WalkToStop) {
-      character.animationState = CharacterAnimationState::WalkToStop;
-      character.animationTime = 0.0F;
-    }
-
-    const float transitionDuration =
-        animationDurationSeconds(walkToStopAnimation);
-    if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
-      character.animationState = CharacterAnimationState::Idle;
-      character.animationTime = 0.0F;
-      return;
-    }
-
-    character.animationTime += deltaTime;
-    if (character.animationTime >= transitionDuration) {
-      character.animationState = CharacterAnimationState::Idle;
-      character.animationTime = 0.0F;
-    }
-    return;
+  if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+    movement += screenDirectionToWorldDirection(0.0F, -1.0F);
   }
-
-  const bool startedMoving = !character.isMoving;
-  character.isMoving = true;
-  if (startedMoving ||
-      character.animationState == CharacterAnimationState::Idle ||
-      character.animationState == CharacterAnimationState::WalkToStop) {
-    character.animationState = CharacterAnimationState::IdleToWalk;
-    character.animationTime = 0.0F;
+  if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+    movement += screenDirectionToWorldDirection(1.0F, 0.0F);
+  }
+  if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+    movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
   }
 
   const bool wantsToMove = glm::length(movement) > 0.0F;
@@ -981,71 +985,12 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
     const float coastScale =
         walkToStopCoastScale(input.character, walkToStopAnimation);
     if (coastScale > 0.0F) {
-      input.character.position += input.character.facing * CharacterMoveSpeed *
-                                  coastScale * deltaTime;
+      input.character.position +=
+          input.character.facing * CharacterMoveSpeed * coastScale * deltaTime;
     }
   }
 
-  updateCharacterAnimationState(
-      input.character, wantsToMove,
-      deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
-      idleToWalkAnimation, walkToStopAnimation);
-
-  if (!wantsToMove) {
-    const float coastScale =
-        walkToStopCoastScale(input.character, walkToStopAnimation);
-    if (coastScale > 0.0F) {
-      input.character.position += input.character.facing * CharacterMoveSpeed *
-                                  coastScale * deltaTime;
-    }
-  }
-
-  character.animationTime += deltaTime;
-}
-
-void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
-    const AnimationClip &idleToWalkAnimation,
-    const AnimationClip &walkToStopAnimation) {
-if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-glfwSetWindowShouldClose(window, GLFW_TRUE);
-}
-
-glm::vec3 movement{0.0F, 0.0F, 0.0F};
-if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-movement += screenDirectionToWorldDirection(0.0F, 1.0F);
-}
-if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-movement += screenDirectionToWorldDirection(0.0F, -1.0F);
-}
-if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-movement += screenDirectionToWorldDirection(1.0F, 0.0F);
-}
-if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-movement += screenDirectionToWorldDirection(-1.0F, 0.0F);
-}
-
-const bool wantsToMove = glm::length(movement) > 0.0F;
-if (wantsToMove) {
-const glm::vec3 direction = glm::normalize(movement);
-input.character.position += direction * CharacterMoveSpeed * deltaTime;
-input.character.facing = direction;
-}
-
-updateCharacterAnimationState(
-input.character, wantsToMove,
-deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
-idleToWalkAnimation, walkToStopAnimation);
-
-if (!wantsToMove) {
-const float coastScale =
-walkToStopCoastScale(input.character, walkToStopAnimation);
-if (coastScale > 0.0F) {
-input.character.position += input.character.facing * CharacterMoveSpeed *
-                 coastScale * deltaTime;
-}
-}
-
-input.camera.target = input.character.position;
+  input.camera.target = input.character.position;
 }
 
 void loadMatrix(GLenum matrixMode, const glm::mat4 &matrix) {
@@ -1164,7 +1109,8 @@ float interpolationFactor(double animationTime, double startTime,
   if (duration <= std::numeric_limits<double>::epsilon()) {
     return 0.0F;
   }
-  return static_cast<float>((animationTime - startTime) / duration);
+  return std::clamp(static_cast<float>((animationTime - startTime) / duration),
+                    0.0F, 1.0F);
 }
 
 glm::vec3 sampleVectorKeys(double animationTime,
@@ -1323,7 +1269,8 @@ void computeBoneMatricesRecursive(const SkeletonNode &node,
 
 std::vector<glm::mat4> computeBoneMatrices(const Model &model,
                                            const AnimationClip &animation,
-                                           float elapsedSeconds) {
+                                           float elapsedSeconds,
+                                           bool shouldLoop = true) {
   std::vector<glm::mat4> boneMatrices(model.bones.size(), glm::mat4{1.0F});
   if (!model.hasSkeleton() || !animation.isLoaded()) {
     return boneMatrices;
@@ -1333,7 +1280,9 @@ std::vector<glm::mat4> computeBoneMatrices(const Model &model,
       animation.ticksPerSecond > 0.0 ? animation.ticksPerSecond : 24.0;
   const double timeInTicks =
       static_cast<double>(elapsedSeconds) * ticksPerSecond;
-  const double animationTime = std::fmod(timeInTicks, animation.durationTicks);
+  const double animationTime =
+      shouldLoop ? std::fmod(timeInTicks, animation.durationTicks)
+                 : std::clamp(timeInTicks, 0.0, animation.durationTicks);
   computeBoneMatricesRecursive(model.rootNode, glm::mat4{1.0F}, model,
                                animation, animationTime, boneMatrices);
   return boneMatrices;
@@ -1368,11 +1317,9 @@ Vertex animatedVertex(const Vertex &vertex,
   return result;
 }
 
-void drawModel(const Model &model, const AnimationClip &animation,
-               float animationTime, const Texture2D &texture) {
-  const std::vector<glm::mat4> boneMatrices =
-      computeBoneMatrices(model, animation, animationTime);
-
+void drawModelWithBoneMatrices(const Model &model,
+                               const std::vector<glm::mat4> &boneMatrices,
+                               const Texture2D &texture) {
   if (texture.isLoaded()) {
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
@@ -1412,6 +1359,41 @@ void drawModel(const Model &model, const AnimationClip &animation,
   }
 }
 
+bool isLoopingAnimationState(CharacterAnimationState animationState) {
+  return animationState == CharacterAnimationState::Idle ||
+         animationState == CharacterAnimationState::Walk;
+}
+
+float characterAnimationBlendFactor(const Character &character) {
+  if (!character.isAnimationBlending()) {
+    return 1.0F;
+  }
+
+  const float linearFactor = std::clamp(character.animationBlendTime /
+                                            character.animationBlendDuration,
+                                        0.0F, 1.0F);
+  return linearFactor * linearFactor * (3.0F - 2.0F * linearFactor);
+}
+
+std::vector<glm::mat4>
+blendBoneMatrices(const std::vector<glm::mat4> &sourceBoneMatrices,
+                  const std::vector<glm::mat4> &targetBoneMatrices,
+                  float blendFactor) {
+  if (sourceBoneMatrices.size() != targetBoneMatrices.size()) {
+    return targetBoneMatrices;
+  }
+
+  std::vector<glm::mat4> blendedBoneMatrices;
+  blendedBoneMatrices.reserve(targetBoneMatrices.size());
+  for (std::size_t boneIndex = 0; boneIndex < targetBoneMatrices.size();
+       ++boneIndex) {
+    blendedBoneMatrices.push_back(sourceBoneMatrices[boneIndex] *
+                                      (1.0F - blendFactor) +
+                                  targetBoneMatrices[boneIndex] * blendFactor);
+  }
+  return blendedBoneMatrices;
+}
+
 void configureOpenGl() {
   glEnable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
@@ -1421,12 +1403,12 @@ void configureOpenGl() {
 }
 
 const AnimationClip &
-activeAnimationForCharacter(const Character &character,
-                            const AnimationClip &idleAnimation,
-                            const AnimationClip &idleToWalkAnimation,
-                            const AnimationClip &walkAnimation,
-                            const AnimationClip &walkToStopAnimation) {
-  switch (character.animationState) {
+animationForCharacterState(CharacterAnimationState animationState,
+                           const AnimationClip &idleAnimation,
+                           const AnimationClip &idleToWalkAnimation,
+                           const AnimationClip &walkAnimation,
+                           const AnimationClip &walkToStopAnimation) {
+  switch (animationState) {
   case CharacterAnimationState::Idle:
     return idleAnimation;
   case CharacterAnimationState::IdleToWalk:
@@ -1440,9 +1422,51 @@ activeAnimationForCharacter(const Character &character,
   return idleAnimation;
 }
 
+const AnimationClip &
+activeAnimationForCharacter(const Character &character,
+                            const AnimationClip &idleAnimation,
+                            const AnimationClip &idleToWalkAnimation,
+                            const AnimationClip &walkAnimation,
+                            const AnimationClip &walkToStopAnimation) {
+  return animationForCharacterState(character.animationState, idleAnimation,
+                                    idleToWalkAnimation, walkAnimation,
+                                    walkToStopAnimation);
+}
+
+std::vector<glm::mat4>
+boneMatricesForCharacter(const Character &character, const Model &bodyModel,
+                         const AnimationClip &idleAnimation,
+                         const AnimationClip &idleToWalkAnimation,
+                         const AnimationClip &walkAnimation,
+                         const AnimationClip &walkToStopAnimation) {
+  const AnimationClip &activeAnimation =
+      activeAnimationForCharacter(character, idleAnimation, idleToWalkAnimation,
+                                  walkAnimation, walkToStopAnimation);
+  std::vector<glm::mat4> activeBoneMatrices =
+      computeBoneMatrices(bodyModel, activeAnimation, character.animationTime,
+                          isLoopingAnimationState(character.animationState));
+
+  if (!character.isAnimationBlending()) {
+    return activeBoneMatrices;
+  }
+
+  const AnimationClip &sourceAnimation = animationForCharacterState(
+      character.animationBlendSourceState, idleAnimation, idleToWalkAnimation,
+      walkAnimation, walkToStopAnimation);
+  const std::vector<glm::mat4> sourceBoneMatrices = computeBoneMatrices(
+      bodyModel, sourceAnimation, character.animationBlendSourceTime,
+      isLoopingAnimationState(character.animationBlendSourceState));
+
+  return blendBoneMatrices(sourceBoneMatrices, activeBoneMatrices,
+                           characterAnimationBlendFactor(character));
+}
+
 void renderScene(const Camera &camera, const Character &character,
                  const Model &bodyModel, const Texture2D &bodyTexture,
-                 const AnimationClip &activeAnimation, int framebufferWidth,
+                 const AnimationClip &idleAnimation,
+                 const AnimationClip &idleToWalkAnimation,
+                 const AnimationClip &walkAnimation,
+                 const AnimationClip &walkToStopAnimation, int framebufferWidth,
                  int framebufferHeight) {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -1464,7 +1488,12 @@ void renderScene(const Camera &camera, const Character &character,
   glRotatef(rotationDegreesForFacing(character.facing), 0.0F, 1.0F, 0.0F);
   if (bodyModel.isLoaded()) {
     glScalef(0.01F, 0.01F, 0.01F);
-    drawModel(bodyModel, activeAnimation, character.animationTime, bodyTexture);
+    drawModelWithBoneMatrices(
+        bodyModel,
+        boneMatricesForCharacter(character, bodyModel, idleAnimation,
+                                 idleToWalkAnimation, walkAnimation,
+                                 walkToStopAnimation),
+        bodyTexture);
   } else {
     drawCube();
   }
@@ -1537,11 +1566,9 @@ int main() {
     int framebufferWidth = 0;
     int framebufferHeight = 0;
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
-    const AnimationClip &activeAnimation = activeAnimationForCharacter(
-        input.character, idleAnimation, idleToWalkAnimation, walkAnimation,
-        walkToStopAnimation);
     renderScene(input.camera, input.character, bodyModel, bodyTexture,
-                activeAnimation, framebufferWidth, framebufferHeight);
+                idleAnimation, idleToWalkAnimation, walkAnimation,
+                walkToStopAnimation, framebufferWidth, framebufferHeight);
 
     glfwSwapBuffers(window);
     glfwPollEvents();
