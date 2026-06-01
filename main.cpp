@@ -228,6 +228,14 @@ struct Camera {
     return glm::lookAt(position(), target, glm::vec3{0.0F, 1.0F, 0.0F});
   }
 
+  [[nodiscard]] glm::mat4 projectionMatrix(float aspectRatio) const {
+    const float halfHeight =
+        distance * std::tan(glm::radians(FieldOfView) * 0.5F);
+    const float halfWidth = halfHeight * aspectRatio;
+    return glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, NearPlane,
+                      FarPlane);
+  }
+
   void zoom(float amount) {
     distance = std::clamp(distance - amount * ZoomSpeed, MinCameraDistance,
                           MaxCameraDistance);
@@ -2058,8 +2066,7 @@ void renderScene(const Camera &camera, const Character &character,
                                 ? static_cast<float>(framebufferWidth) /
                                       static_cast<float>(framebufferHeight)
                                 : 1.0F;
-  const glm::mat4 projection = glm::perspective(
-      glm::radians(FieldOfView), aspectRatio, NearPlane, FarPlane);
+  const glm::mat4 projection = camera.projectionMatrix(aspectRatio);
 
   loadMatrix(GL_PROJECTION, projection);
   loadMatrix(GL_MODELVIEW, camera.viewMatrix());
