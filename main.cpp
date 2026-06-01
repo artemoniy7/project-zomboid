@@ -38,6 +38,8 @@ constexpr float CharacterStopToIdleBlendDuration = 0.18F;
 constexpr float CharacterStartAccelerationMinScale = 0.12F;
 constexpr float CharacterStopCoastSpeedScale = 0.55F;
 constexpr float CharacterIdleTurnThresholdDegrees = 22.5F;
+constexpr float CharacterIdleTurnMoveStartProgress = 0.45F;
+constexpr float CharacterMovingTurnAngularSpeedDegrees = 540.0F;
 constexpr float ZoomSpeed = 1.25F;
 constexpr float MinCameraDistance = 4.0F;
 constexpr float MaxCameraDistance = 40.0F;
@@ -890,6 +892,29 @@ float signedAngleBetweenDirections(const glm::vec3 &from, const glm::vec3 &to) {
   return std::atan2(cross, dot);
 }
 
+glm::vec3 rotateDirectionY(const glm::vec3 &direction, float radians) {
+  const float sine = std::sin(radians);
+  const float cosine = std::cos(radians);
+  return glm::normalize(glm::vec3{direction.x * cosine + direction.z * sine,
+                                  0.0F,
+                                  direction.z * cosine - direction.x * sine});
+}
+
+void turnCharacterFacingToward(Character &character,
+                               const glm::vec3 &targetFacing, float deltaTime) {
+  const float turnAngle =
+      signedAngleBetweenDirections(character.facing, targetFacing);
+  const float maxTurnRadians =
+      glm::radians(CharacterMovingTurnAngularSpeedDegrees) * deltaTime;
+  if (std::abs(turnAngle) <= maxTurnRadians) {
+    character.facing = targetFacing;
+    return;
+  }
+
+  character.facing = rotateDirectionY(
+      character.facing, std::clamp(turnAngle, -maxTurnRadians, maxTurnRadians));
+}
+
 CharacterAnimationState idleTurnAnimationStateForAngle(float signedAngle) {
   const bool turnLeft = signedAngle > 0.0F;
   const float angleDegrees = std::abs(glm::degrees(signedAngle));
@@ -990,6 +1015,28 @@ const AnimationClip &
 clipForAnimationState(CharacterAnimationState animationState,
                       const CharacterAnimationClips &animations);
 
+float idleTurnMovementScale(const Character &character,
+                            const CharacterAnimationClips &animations) {
+  if (!isIdleTurnAnimationState(character.animationState)) {
+    return 1.0F;
+  }
+
+  const float turnDuration = animationDurationSeconds(
+      idleTurnAnimationForState(character.animationState, animations));
+  if (turnDuration <= std::numeric_limits<float>::epsilon()) {
+    return 1.0F;
+  }
+
+  const float turnProgress =
+      std::clamp(character.animationTime / turnDuration, 0.0F, 1.0F);
+  if (turnProgress <= CharacterIdleTurnMoveStartProgress) {
+    return 0.0F;
+  }
+
+  return smoothStep((turnProgress - CharacterIdleTurnMoveStartProgress) /
+                    (1.0F - CharacterIdleTurnMoveStartProgress));
+}
+
 float characterAnimationPlaybackSpeed(const Character &character,
                                       bool wantsToMove) {
   const bool isTransitioning =
@@ -1008,6 +1055,30 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
   advanceCharacterAnimationBlend(character, deltaTime);
 
   if (isIdleTurnAnimationState(character.animationState)) {
+    if (wantsToMove) {
+      const float retargetAngle =
+          signedAngleBetweenDirections(character.facing, moveDirection);
+      if (std::abs(glm::degrees(retargetAngle)) <
+          CharacterIdleTurnThresholdDegrees) {
+        clearCharacterAnimationBlend(character);
+        character.facing = moveDirection;
+        character.animationState = CharacterAnimationState::IdleToWalk;
+        character.animationTime = 0.0F;
+        return;
+      }
+
+      const CharacterAnimationState retargetState =
+          idleTurnAnimationStateForAngle(retargetAngle);
+      if (retargetState != character.animationState &&
+          idleTurnAnimationForState(retargetState, animations).isLoaded()) {
+        character.animationState = retargetState;
+        character.animationTime = 0.0F;
+        character.turnStartFacing = character.facing;
+      }
+      character.turnTargetFacing = moveDirection;
+      character.turnAngleRadians = retargetAngle;
+    }
+
     const AnimationClip &turnAnimation =
         idleTurnAnimationForState(character.animationState, animations);
     const float turnDuration = animationDurationSeconds(turnAnimation);
@@ -1024,11 +1095,14 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
     character.animationTime += deltaTime;
 
     if (character.animationTime >= turnDuration) {
+      const bool startedWalkingDuringTurn = character.isMoving && wantsToMove;
       clearCharacterAnimationBlend(character);
       character.facing = character.turnTargetFacing;
-      character.animationState = wantsToMove
-                                     ? CharacterAnimationState::IdleToWalk
-                                     : CharacterAnimationState::Idle;
+      character.animationState =
+          wantsToMove
+              ? (startedWalkingDuringTurn ? CharacterAnimationState::Walk
+                                          : CharacterAnimationState::IdleToWalk)
+              : CharacterAnimationState::Idle;
       character.animationTime = 0.0F;
       character.isMoving = wantsToMove;
     }
@@ -1143,21 +1217,27 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
   const glm::vec3 moveDirection =
       wantsToMove ? glm::normalize(movement) : glm::vec3{0.0F, 0.0F, 0.0F};
 
-  const bool wasTurningInPlace =
-      isIdleTurnAnimationState(input.character.animationState);
-
   updateCharacterAnimationState(
       input.character, wantsToMove, moveDirection,
       deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
       animations);
 
-  if (wantsToMove && !wasTurningInPlace &&
-      !isIdleTurnAnimationState(input.character.animationState)) {
-    const float accelerationScale =
-        idleToWalkAccelerationScale(input.character, animations.idleToWalk);
-    input.character.position +=
-        moveDirection * CharacterMoveSpeed * accelerationScale * deltaTime;
-    input.character.facing = moveDirection;
+  if (wantsToMove) {
+    const bool isTurningInPlace =
+        isIdleTurnAnimationState(input.character.animationState);
+    const float turnMovementScale =
+        idleTurnMovementScale(input.character, animations);
+    if (turnMovementScale > 0.0F) {
+      const float accelerationScale =
+          idleToWalkAccelerationScale(input.character, animations.idleToWalk);
+      input.character.position += moveDirection * CharacterMoveSpeed *
+                                  accelerationScale * turnMovementScale *
+                                  deltaTime;
+      input.character.isMoving = true;
+    }
+    if (!isTurningInPlace) {
+      turnCharacterFacingToward(input.character, moveDirection, deltaTime);
+    }
   }
 
   if (!wantsToMove) {
