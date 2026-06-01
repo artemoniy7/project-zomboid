@@ -44,6 +44,8 @@ constexpr float ZoomSpeed = 1.25F;
 constexpr float MinCameraDistance = 4.0F;
 constexpr float MaxCameraDistance = 40.0F;
 constexpr float FieldOfView = 45.0F;
+constexpr float CameraYawDegrees = 45.0F;
+constexpr float CameraPitchDownDegrees = 35.2643897F;
 constexpr float NearPlane = 0.1F;
 constexpr float FarPlane = 200.0F;
 constexpr int MaxVertexBones = 4;
@@ -205,7 +207,12 @@ struct Camera {
   float distance = 14.0F;
 
   [[nodiscard]] glm::vec3 position() const {
-    const glm::vec3 isometricOffset{1.0F, 1.25F, 1.0F};
+    const float yawRadians = glm::radians(CameraYawDegrees);
+    const float pitchRadians = glm::radians(CameraPitchDownDegrees);
+    const float horizontalDistance = std::cos(pitchRadians);
+    const glm::vec3 isometricOffset{
+        std::sin(yawRadians) * horizontalDistance, std::sin(pitchRadians),
+        std::cos(yawRadians) * horizontalDistance};
     return target + glm::normalize(isometricOffset) * distance;
   }
 
@@ -219,6 +226,14 @@ struct Camera {
 
   [[nodiscard]] glm::mat4 viewMatrix() const {
     return glm::lookAt(position(), target, glm::vec3{0.0F, 1.0F, 0.0F});
+  }
+
+  [[nodiscard]] glm::mat4 projectionMatrix(float aspectRatio) const {
+    const float halfHeight =
+        distance * std::tan(glm::radians(FieldOfView) * 0.5F);
+    const float halfWidth = halfHeight * aspectRatio;
+    return glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, NearPlane,
+                      FarPlane);
   }
 
   void zoom(float amount) {
@@ -2051,8 +2066,7 @@ void renderScene(const Camera &camera, const Character &character,
                                 ? static_cast<float>(framebufferWidth) /
                                       static_cast<float>(framebufferHeight)
                                 : 1.0F;
-  const glm::mat4 projection = glm::perspective(
-      glm::radians(FieldOfView), aspectRatio, NearPlane, FarPlane);
+  const glm::mat4 projection = camera.projectionMatrix(aspectRatio);
 
   loadMatrix(GL_PROJECTION, projection);
   loadMatrix(GL_MODELVIEW, camera.viewMatrix());
