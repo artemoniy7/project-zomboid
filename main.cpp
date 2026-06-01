@@ -1583,11 +1583,12 @@ const AnimationClip &
 idleTurnAnimationForState(CharacterAnimationState animationState,
                           const CharacterAnimationClips &animations) {
   switch (animationState) {
+  // The 45- and 90-degree source clips are named opposite to the direction
+  // they play.
   case CharacterAnimationState::IdleTurn45L:
-    return animations.idleTurn45L;
-  case CharacterAnimationState::IdleTurn45R:
     return animations.idleTurn45R;
-  // The 90-degree source clips are named opposite to the direction they play.
+  case CharacterAnimationState::IdleTurn45R:
+    return animations.idleTurn45L;
   case CharacterAnimationState::IdleTurn90L:
     return animations.idleTurn90R;
   case CharacterAnimationState::IdleTurn90R:
@@ -1615,13 +1616,14 @@ clipForAnimationState(CharacterAnimationState animationState,
   case CharacterAnimationState::WalkToStop:
     return animations.walkToStop.isLoaded() ? animations.walkToStop
                                             : animations.idle;
+  // The 45- and 90-degree source clips are named opposite to the direction
+  // they play.
   case CharacterAnimationState::IdleTurn45L:
-    return animations.idleTurn45L.isLoaded() ? animations.idleTurn45L
-                                             : animations.idle;
-  case CharacterAnimationState::IdleTurn45R:
     return animations.idleTurn45R.isLoaded() ? animations.idleTurn45R
                                              : animations.idle;
-  // The 90-degree source clips are named opposite to the direction they play.
+  case CharacterAnimationState::IdleTurn45R:
+    return animations.idleTurn45L.isLoaded() ? animations.idleTurn45L
+                                             : animations.idle;
   case CharacterAnimationState::IdleTurn90L:
     return animations.idleTurn90R.isLoaded() ? animations.idleTurn90R
                                              : animations.idle;
