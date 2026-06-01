@@ -35,6 +35,7 @@ constexpr float CharacterMoveSpeed = 3.2F;
 constexpr float CharacterAnimationPlaybackSpeed = 0.85F;
 constexpr float CharacterTransitionAnimationPlaybackSpeed = 1.35F;
 constexpr float CharacterStopToIdleBlendDuration = 0.18F;
+constexpr float CharacterStartAccelerationMinScale = 0.12F;
 constexpr float CharacterStopCoastSpeedScale = 0.55F;
 constexpr float ZoomSpeed = 1.25F;
 constexpr float MinCameraDistance = 4.0F;
@@ -848,6 +849,28 @@ void advanceCharacterAnimationBlend(Character &character, float deltaTime) {
                character.animationBlendDuration);
 }
 
+float smoothStep(float progress) {
+  const float clampedProgress = std::clamp(progress, 0.0F, 1.0F);
+  return clampedProgress * clampedProgress * (3.0F - 2.0F * clampedProgress);
+}
+
+float idleToWalkAccelerationScale(const Character &character,
+                                  const AnimationClip &idleToWalkAnimation) {
+  if (character.animationState != CharacterAnimationState::IdleToWalk) {
+    return 1.0F;
+  }
+
+  const float transitionDuration =
+      animationDurationSeconds(idleToWalkAnimation);
+  if (transitionDuration <= std::numeric_limits<float>::epsilon()) {
+    return 1.0F;
+  }
+
+  const float transitionProgress = character.animationTime / transitionDuration;
+  return glm::mix(CharacterStartAccelerationMinScale, 1.0F,
+                  smoothStep(transitionProgress));
+}
+
 float walkToStopCoastScale(const Character &character,
                            const AnimationClip &walkToStopAnimation) {
   if (character.animationState != CharacterAnimationState::WalkToStop) {
@@ -970,16 +993,21 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
   }
 
   const bool wantsToMove = glm::length(movement) > 0.0F;
-  if (wantsToMove) {
-    const glm::vec3 direction = glm::normalize(movement);
-    input.character.position += direction * CharacterMoveSpeed * deltaTime;
-    input.character.facing = direction;
-  }
+  const glm::vec3 moveDirection =
+      wantsToMove ? glm::normalize(movement) : glm::vec3{0.0F, 0.0F, 0.0F};
 
   updateCharacterAnimationState(
       input.character, wantsToMove,
       deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
       idleToWalkAnimation, walkToStopAnimation);
+
+  if (wantsToMove) {
+    const float accelerationScale =
+        idleToWalkAccelerationScale(input.character, idleToWalkAnimation);
+    input.character.position +=
+        moveDirection * CharacterMoveSpeed * accelerationScale * deltaTime;
+    input.character.facing = moveDirection;
+  }
 
   if (!wantsToMove) {
     const float coastScale =
@@ -1369,10 +1397,8 @@ float characterAnimationBlendFactor(const Character &character) {
     return 1.0F;
   }
 
-  const float linearFactor = std::clamp(character.animationBlendTime /
-                                            character.animationBlendDuration,
-                                        0.0F, 1.0F);
-  return linearFactor * linearFactor * (3.0F - 2.0F * linearFactor);
+  return smoothStep(character.animationBlendTime /
+                    character.animationBlendDuration);
 }
 
 std::vector<glm::mat4>
