@@ -5,7 +5,7 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 ## Current features
 
 - GLFW window and real-time game loop.
-- GLM isometric camera math with perspective projection.
+- GLM isometric camera math with perspective projection, using Project Zomboid-style 60° FOV plus a classic 45° horizontal yaw and 35.264° downward pitch.
 - Blue sky clear color.
 - Simple ground grid to make movement visible.
 - Loads `media/models/Bob.fbx` through Assimp and draws it in the world.
