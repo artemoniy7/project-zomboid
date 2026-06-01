@@ -41,7 +41,7 @@ cmake --build build
 If you want to compile the single source file directly with `g++` instead of CMake, use `pkg-config` to ask GLFW for the required compiler and linker flags. The `$()` part is important on Linux/macOS shells: it runs `pkg-config` first and substitutes its output into the `g++` command.
 
 ```bash
-g++ -std=c++20 -Wall -Wextra -Wpedantic main.cpp -o pz_engine $(pkg-config --cflags --libs glfw3 assimp) -lGL
+g++ -std=c++20 -Wall -Wextra -Wpedantic main.cpp -o pz_engine $(pkg-config --cflags --libs glfw3 assimp) -lGL -lz
 ./pz_engine
 ```
 
@@ -49,16 +49,16 @@ If your compiler complains about `--cflags` or `--libs`, those flags were passed
 
 ```bash
 pkg-config --cflags --libs glfw3 assimp
-g++ -std=c++20 -Wall -Wextra -Wpedantic main.cpp -o pz_engine <paste pkg-config output here> -lGL
+g++ -std=c++20 -Wall -Wextra -Wpedantic main.cpp -o pz_engine <paste pkg-config output here> -lGL -lz
 ```
 
 On Windows `cmd.exe` or PowerShell, `$(...)` does not work the same way as in Bash. Prefer the CMake build there, or use a MinGW/MSYS2 shell where `pkg-config` works. A typical MinGW manual link command looks like this, but library paths can differ on your machine:
 
 ```bash
-g++ -std=c++20 -Wall -Wextra -Wpedantic main.cpp -o pz_engine.exe -lglfw3 -lassimp -lopengl32 -lgdi32
+g++ -std=c++20 -Wall -Wextra -Wpedantic main.cpp -o pz_engine.exe -lglfw3 -lassimp -lopengl32 -lgdi32 -lz
 ```
 
-GLM is header-only, so it does not need an extra linker flag. If `pkg-config` cannot find `glfw3` or `assimp`, install the matching development package first or use the CMake build above.
+GLM is header-only, so it does not need an extra linker flag. The `-lz` flag is required by the PNG loader. If `pkg-config` cannot find `glfw3` or `assimp`, install the matching development package first or use the CMake build above.
 
 On Ubuntu-like systems the package names are typically similar to:
 

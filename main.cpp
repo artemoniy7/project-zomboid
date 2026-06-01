@@ -349,6 +349,9 @@ void appendMesh(const aiMesh &assimpMesh, const glm::mat4 &transform,
     const glm::vec3 sourcePosition = toGlm(assimpMesh.mVertices[vertexIndex]);
     const glm::vec4 transformedPosition =
         transform * glm::vec4{sourcePosition, 1.0F};
+    const glm::vec3 transformedPosition3{transformedPosition.x,
+                                         transformedPosition.y,
+                                         transformedPosition.z};
 
     glm::vec3 normal{0.0F, 1.0F, 0.0F};
     glm::vec3 staticNormal{0.0F, 1.0F, 0.0F};
@@ -364,9 +367,13 @@ void appendMesh(const aiMesh &assimpMesh, const glm::mat4 &transform,
       texCoord = {sourceTexCoord.x, sourceTexCoord.y};
     }
 
-    mesh.vertices.push_back(Vertex{sourcePosition,
-                                   glm::vec3{transformedPosition}, normal,
-                                   staticNormal, texCoord});
+    Vertex vertex;
+    vertex.position = sourcePosition;
+    vertex.staticPosition = transformedPosition3;
+    vertex.normal = normal;
+    vertex.staticNormal = staticNormal;
+    vertex.texCoord = texCoord;
+    mesh.vertices.push_back(vertex);
   }
 
   for (unsigned int boneIndex = 0; boneIndex < assimpMesh.mNumBones;
@@ -534,7 +541,8 @@ std::size_t countMatchingAnimationChannels(const Model &model,
                                            const AnimationClip &animation) {
   std::size_t matchingChannels = 0;
   for (const AnimationChannel &channel : animation.channels) {
-    if (model.boneIndexByName.contains(channel.nodeName)) {
+    if (model.boneIndexByName.find(channel.nodeName) !=
+        model.boneIndexByName.end()) {
       ++matchingChannels;
     }
   }
@@ -978,6 +986,20 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
     }
   }
 
+  updateCharacterAnimationState(
+      input.character, wantsToMove,
+      deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
+      idleToWalkAnimation, walkToStopAnimation);
+
+  if (!wantsToMove) {
+    const float coastScale =
+        walkToStopCoastScale(input.character, walkToStopAnimation);
+    if (coastScale > 0.0F) {
+      input.character.position += input.character.facing * CharacterMoveSpeed *
+                                  coastScale * deltaTime;
+    }
+  }
+
   character.animationTime += deltaTime;
 }
 
@@ -1339,7 +1361,8 @@ Vertex animatedVertex(const Vertex &vertex,
   }
 
   if (totalWeight > std::numeric_limits<float>::epsilon()) {
-    result.staticPosition = glm::vec3{skinnedPosition};
+    result.staticPosition =
+        glm::vec3{skinnedPosition.x, skinnedPosition.y, skinnedPosition.z};
     result.staticNormal = glm::normalize(skinnedNormal);
   }
   return result;
