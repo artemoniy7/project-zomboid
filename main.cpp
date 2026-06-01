@@ -1587,10 +1587,11 @@ idleTurnAnimationForState(CharacterAnimationState animationState,
     return animations.idleTurn45L;
   case CharacterAnimationState::IdleTurn45R:
     return animations.idleTurn45R;
+  // The 90-degree source clips are named opposite to the direction they play.
   case CharacterAnimationState::IdleTurn90L:
-    return animations.idleTurn90L;
-  case CharacterAnimationState::IdleTurn90R:
     return animations.idleTurn90R;
+  case CharacterAnimationState::IdleTurn90R:
+    return animations.idleTurn90L;
   case CharacterAnimationState::IdleTurn180L:
     return animations.idleTurn180L;
   case CharacterAnimationState::IdleTurn180R:
@@ -1620,11 +1621,12 @@ clipForAnimationState(CharacterAnimationState animationState,
   case CharacterAnimationState::IdleTurn45R:
     return animations.idleTurn45R.isLoaded() ? animations.idleTurn45R
                                              : animations.idle;
+  // The 90-degree source clips are named opposite to the direction they play.
   case CharacterAnimationState::IdleTurn90L:
-    return animations.idleTurn90L.isLoaded() ? animations.idleTurn90L
+    return animations.idleTurn90R.isLoaded() ? animations.idleTurn90R
                                              : animations.idle;
   case CharacterAnimationState::IdleTurn90R:
-    return animations.idleTurn90R.isLoaded() ? animations.idleTurn90R
+    return animations.idleTurn90L.isLoaded() ? animations.idleTurn90L
                                              : animations.idle;
   case CharacterAnimationState::IdleTurn180L:
     return animations.idleTurn180L.isLoaded() ? animations.idleTurn180L
