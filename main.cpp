@@ -980,6 +980,11 @@ const AnimationClip &
 animationForCharacterState(CharacterAnimationState animationState,
                            const CharacterAnimationClips &animations);
 
+const AnimationClip &animationForCharacterState(
+    CharacterAnimationState animationState, const AnimationClip &idleAnimation,
+    const AnimationClip &idleToWalkAnimation, const AnimationClip &walkAnimation,
+    const AnimationClip &walkToStopAnimation);
+
 float characterAnimationPlaybackSpeed(const Character &character,
                                       bool wantsToMove) {
   const bool isTransitioning =
@@ -1641,6 +1646,44 @@ animationForCharacterState(CharacterAnimationState animationState,
   case CharacterAnimationState::Walk:
     return animations.walk;
   case CharacterAnimationState::WalkToStop:
+    return animations.walkToStop.isLoaded() ? animations.walkToStop
+                                            : animations.idle;
+  case CharacterAnimationState::IdleTurn45L:
+    return animations.idleTurn45L.isLoaded() ? animations.idleTurn45L
+                                             : animations.idle;
+  case CharacterAnimationState::IdleTurn45R:
+    return animations.idleTurn45R.isLoaded() ? animations.idleTurn45R
+                                             : animations.idle;
+  case CharacterAnimationState::IdleTurn90L:
+    return animations.idleTurn90L.isLoaded() ? animations.idleTurn90L
+                                             : animations.idle;
+  case CharacterAnimationState::IdleTurn90R:
+    return animations.idleTurn90R.isLoaded() ? animations.idleTurn90R
+                                             : animations.idle;
+  case CharacterAnimationState::IdleTurn180L:
+    return animations.idleTurn180L.isLoaded() ? animations.idleTurn180L
+                                              : animations.idle;
+  case CharacterAnimationState::IdleTurn180R:
+    return animations.idleTurn180R.isLoaded() ? animations.idleTurn180R
+                                              : animations.idle;
+  }
+
+  return animations.idle;
+}
+
+[[maybe_unused]] const AnimationClip &animationForCharacterState(
+    CharacterAnimationState animationState, const AnimationClip &idleAnimation,
+    const AnimationClip &idleToWalkAnimation, const AnimationClip &walkAnimation,
+    const AnimationClip &walkToStopAnimation) {
+  switch (animationState) {
+  case CharacterAnimationState::Idle:
+    return animations.idle;
+  case CharacterAnimationState::IdleToWalk:
+    return animations.idleToWalk.isLoaded() ? animations.idleToWalk
+                                            : animations.walk;
+  case CharacterAnimationState::Walk:
+    return animations.walk;
+  case CharacterAnimationState::WalkToStop:
     return walkToStopAnimation.isLoaded() ? walkToStopAnimation : idleAnimation;
   case CharacterAnimationState::IdleTurn45L:
   case CharacterAnimationState::IdleTurn45R:
@@ -1653,45 +1696,6 @@ animationForCharacterState(CharacterAnimationState animationState,
 
   const AnimationClip &sourceAnimation = animationForCharacterState(
       character.animationBlendSourceState, animations);
-  const std::vector<glm::mat4> sourceBoneMatrices = computeBoneMatrices(
-      bodyModel, sourceAnimation, character.animationBlendSourceTime,
-      isLoopingAnimationState(character.animationBlendSourceState));
-
-  return blendBoneMatrices(sourceBoneMatrices, activeBoneMatrices,
-                           characterAnimationBlendFactor(character));
-}
-
-const AnimationClip &
-activeAnimationForCharacter(const Character &character,
-                            const AnimationClip &idleAnimation,
-                            const AnimationClip &idleToWalkAnimation,
-                            const AnimationClip &walkAnimation,
-                            const AnimationClip &walkToStopAnimation) {
-  return animationForCharacterState(character.animationState, idleAnimation,
-                                    idleToWalkAnimation, walkAnimation,
-                                    walkToStopAnimation);
-}
-
-std::vector<glm::mat4>
-boneMatricesForCharacter(const Character &character, const Model &bodyModel,
-                         const AnimationClip &idleAnimation,
-                         const AnimationClip &idleToWalkAnimation,
-                         const AnimationClip &walkAnimation,
-                         const AnimationClip &walkToStopAnimation) {
-  const AnimationClip &activeAnimation =
-      activeAnimationForCharacter(character, idleAnimation, idleToWalkAnimation,
-                                  walkAnimation, walkToStopAnimation);
-  std::vector<glm::mat4> activeBoneMatrices =
-      computeBoneMatrices(bodyModel, activeAnimation, character.animationTime,
-                          isLoopingAnimationState(character.animationState));
-
-  if (!character.isAnimationBlending()) {
-    return activeBoneMatrices;
-  }
-
-  const AnimationClip &sourceAnimation = animationForCharacterState(
-      character.animationBlendSourceState, idleAnimation, idleToWalkAnimation,
-      walkAnimation, walkToStopAnimation);
   const std::vector<glm::mat4> sourceBoneMatrices = computeBoneMatrices(
       bodyModel, sourceAnimation, character.animationBlendSourceTime,
       isLoopingAnimationState(character.animationBlendSourceState));
