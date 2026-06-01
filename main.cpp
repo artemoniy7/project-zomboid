@@ -286,7 +286,7 @@ std::string normalizedAnimationSearchName(const std::string &name) {
   std::string normalized;
   normalized.reserve(name.size());
   for (char value : name) {
-    if (value != '_' && value != '-' && value != ' ' && value != '|') {
+    if (std::isalnum(static_cast<unsigned char>(value)) != 0) {
       normalized.push_back(
           static_cast<char>(std::tolower(static_cast<unsigned char>(value))));
     }
@@ -294,9 +294,18 @@ std::string normalizedAnimationSearchName(const std::string &name) {
   return normalized;
 }
 
+std::string withoutNumericSuffix(std::string value) {
+  while (!value.empty() &&
+         std::isdigit(static_cast<unsigned char>(value.back())) != 0) {
+    value.pop_back();
+  }
+  return value;
+}
+
 const aiAnimation &chooseAnimation(const aiScene &scene,
                                    const std::string &preferredName) {
   const std::string preferred = normalizedAnimationSearchName(preferredName);
+  const std::string preferredBase = withoutNumericSuffix(preferred);
   const aiAnimation *bestAnimation = scene.mAnimations[0];
   int bestScore = -1;
 
@@ -305,9 +314,18 @@ const aiAnimation &chooseAnimation(const aiScene &scene,
     const aiAnimation &animation = *scene.mAnimations[animationIndex];
     const std::string candidate =
         normalizedAnimationSearchName(animation.mName.C_Str());
+    const std::string candidateBase = withoutNumericSuffix(candidate);
     int score = 0;
-    if (!preferred.empty() && candidate.find(preferred) != std::string::npos) {
-      score += 100;
+    if (!preferred.empty() && candidate == preferred) {
+      score += 300;
+    } else if (!preferredBase.empty() && candidateBase == preferredBase) {
+      score += 250;
+    } else if (!preferred.empty() &&
+               candidate.find(preferred) != std::string::npos) {
+      score += 200;
+    } else if (!preferredBase.empty() &&
+               candidate.find(preferredBase) != std::string::npos) {
+      score += 150;
     }
     if (animation.mNumChannels > bestAnimation->mNumChannels) {
       score += 10;
