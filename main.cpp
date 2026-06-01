@@ -872,14 +872,6 @@ float signedAngleBetweenDirections(const glm::vec3 &from, const glm::vec3 &to) {
   return std::atan2(cross, dot);
 }
 
-glm::vec3 rotateDirectionY(const glm::vec3 &direction, float radians) {
-  const float sine = std::sin(radians);
-  const float cosine = std::cos(radians);
-  return glm::normalize(glm::vec3{direction.x * cosine + direction.z * sine,
-                                  0.0F,
-                                  direction.z * cosine - direction.x * sine});
-}
-
 CharacterAnimationState idleTurnAnimationStateForAngle(float signedAngle) {
   const bool turnRight = signedAngle > 0.0F;
   const float angleDegrees = std::abs(glm::degrees(signedAngle));
@@ -1012,10 +1004,6 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
     }
 
     character.animationTime += deltaTime;
-    const float turnProgress =
-        smoothStep(character.animationTime / turnDuration);
-    character.facing = rotateDirectionY(
-        character.turnStartFacing, character.turnAngleRadians * turnProgress);
 
     if (character.animationTime >= turnDuration) {
       clearCharacterAnimationBlend(character);
@@ -1137,12 +1125,15 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
   const glm::vec3 moveDirection =
       wantsToMove ? glm::normalize(movement) : glm::vec3{0.0F, 0.0F, 0.0F};
 
+  const bool wasTurningInPlace =
+      isIdleTurnAnimationState(input.character.animationState);
+
   updateCharacterAnimationState(
       input.character, wantsToMove, moveDirection,
       deltaTime * characterAnimationPlaybackSpeed(input.character, wantsToMove),
       animations);
 
-  if (wantsToMove &&
+  if (wantsToMove && !wasTurningInPlace &&
       !isIdleTurnAnimationState(input.character.animationState)) {
     const float accelerationScale =
         idleToWalkAccelerationScale(input.character, animations.idleToWalk);
