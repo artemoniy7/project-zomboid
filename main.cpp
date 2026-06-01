@@ -873,18 +873,18 @@ float signedAngleBetweenDirections(const glm::vec3 &from, const glm::vec3 &to) {
 }
 
 CharacterAnimationState idleTurnAnimationStateForAngle(float signedAngle) {
-  const bool turnRight = signedAngle > 0.0F;
+  const bool turnLeft = signedAngle > 0.0F;
   const float angleDegrees = std::abs(glm::degrees(signedAngle));
   if (angleDegrees < 67.5F) {
-    return turnRight ? CharacterAnimationState::IdleTurn45R
-                     : CharacterAnimationState::IdleTurn45L;
+    return turnLeft ? CharacterAnimationState::IdleTurn45L
+                    : CharacterAnimationState::IdleTurn45R;
   }
   if (angleDegrees < 135.0F) {
-    return turnRight ? CharacterAnimationState::IdleTurn90R
-                     : CharacterAnimationState::IdleTurn90L;
+    return turnLeft ? CharacterAnimationState::IdleTurn90L
+                    : CharacterAnimationState::IdleTurn90R;
   }
-  return turnRight ? CharacterAnimationState::IdleTurn180R
-                   : CharacterAnimationState::IdleTurn180L;
+  return turnLeft ? CharacterAnimationState::IdleTurn180L
+                  : CharacterAnimationState::IdleTurn180R;
 }
 
 void clearCharacterAnimationBlend(Character &character) {
@@ -1729,18 +1729,18 @@ int main() {
       loadAnimationClip(WalkAnimationPath, "Bob_Walk", true, true);
   animations.walkToStop =
       loadAnimationClip(WalkToStopAnimationPath, "Bob_WalkToStop", true, true);
-  animations.idleTurn45L = loadAnimationClip(IdleTurn45LAnimationPath,
-                                             "Bob_IdleTurn45L.001", true, true);
-  animations.idleTurn45R = loadAnimationClip(IdleTurn45RAnimationPath,
-                                             "Bob_IdleTurn45R.002", true, true);
-  animations.idleTurn90L = loadAnimationClip(IdleTurn90LAnimationPath,
-                                             "Bob_IdleTurn90L.003", true, true);
-  animations.idleTurn90R = loadAnimationClip(IdleTurn90RAnimationPath,
-                                             "Bob_IdleTurn90R.004", true, true);
+  animations.idleTurn45L = loadAnimationClip(
+      IdleTurn45LAnimationPath, "Bob_IdleTurn45L.001", false, true);
+  animations.idleTurn45R = loadAnimationClip(
+      IdleTurn45RAnimationPath, "Bob_IdleTurn45R.002", false, true);
+  animations.idleTurn90L = loadAnimationClip(
+      IdleTurn90LAnimationPath, "Bob_IdleTurn90L.003", false, true);
+  animations.idleTurn90R = loadAnimationClip(
+      IdleTurn90RAnimationPath, "Bob_IdleTurn90R.004", false, true);
   animations.idleTurn180L = loadAnimationClip(
-      IdleTurn180LAnimationPath, "Bob_IdleTurn180L.005", true, true);
+      IdleTurn180LAnimationPath, "Bob_IdleTurn180L.005", false, true);
   animations.idleTurn180R = loadAnimationClip(
-      IdleTurn180RAnimationPath, "Bob_IdleTurn180R.006", true, true);
+      IdleTurn180RAnimationPath, "Bob_IdleTurn180R.006", false, true);
   printAnimationMatchReport(bodyModel, animations.idle);
   printAnimationMatchReport(bodyModel, animations.idleToWalk);
   printAnimationMatchReport(bodyModel, animations.walk);
