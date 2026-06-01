@@ -71,7 +71,9 @@ constexpr const char *IdleTurn180RAnimationPath =
 constexpr const char *BodyTexturePath = "media/textures/Body/MaleBody01.png";
 constexpr const char *Tiles1xTexturePackPath = "media/texturepacks/Tiles1x";
 constexpr float TileSpriteWorldScale = 1.0F / 64.0F;
-constexpr int MaxDemoTiles = 64;
+constexpr const char *GroundTileName = "blends_grassoverlays_01_0";
+constexpr int GroundTileHalfSize = 20;
+constexpr float GroundTileLayerY = -0.01F;
 
 struct Vertex {
   glm::vec3 position{};
@@ -132,7 +134,7 @@ struct PlacedTile {
 struct TileSet {
   std::vector<TileAtlas> atlases;
   std::vector<TileDefinition> tiles;
-  std::vector<PlacedTile> demoTiles;
+  std::vector<PlacedTile> groundTiles;
 
   [[nodiscard]] bool isLoaded() const {
     return !atlases.empty() && !tiles.empty();
@@ -1013,22 +1015,33 @@ void parseTileMetadata(const std::filesystem::path &metadataPath,
   commitTile();
 }
 
-void buildDemoTilePlacements(TileSet &tileSet) {
-  tileSet.demoTiles.clear();
-  const std::size_t tileCount =
-      std::min<std::size_t>(tileSet.tiles.size(), MaxDemoTiles);
-  if (tileCount == 0) {
+std::size_t findTileIndexByName(const TileSet &tileSet,
+                                const std::string &tileName) {
+  for (std::size_t tileIndex = 0; tileIndex < tileSet.tiles.size();
+       ++tileIndex) {
+    if (tileSet.tiles[tileIndex].name == tileName) {
+      return tileIndex;
+    }
+  }
+  return std::numeric_limits<std::size_t>::max();
+}
+
+void buildGroundTilePlacements(TileSet &tileSet) {
+  tileSet.groundTiles.clear();
+  const std::size_t groundTileIndex =
+      findTileIndexByName(tileSet, GroundTileName);
+  if (groundTileIndex == std::numeric_limits<std::size_t>::max()) {
+    std::cerr << "Ground tile '" << GroundTileName
+              << "' was not found in the loaded tile metadata.\n";
     return;
   }
 
-  const int gridWidth = static_cast<int>(std::ceil(std::sqrt(tileCount)));
-  for (std::size_t tileIndex = 0; tileIndex < tileCount; ++tileIndex) {
-    const int x = static_cast<int>(tileIndex % gridWidth);
-    const int z = static_cast<int>(tileIndex / gridWidth);
-    tileSet.demoTiles.push_back(PlacedTile{
-        tileIndex,
-        {static_cast<float>(x) - static_cast<float>(gridWidth) * 0.5F, 0.02F,
-         static_cast<float>(z) - 3.0F}});
+  for (int z = -GroundTileHalfSize; z <= GroundTileHalfSize; ++z) {
+    for (int x = -GroundTileHalfSize; x <= GroundTileHalfSize; ++x) {
+      tileSet.groundTiles.push_back(PlacedTile{
+          groundTileIndex,
+          {static_cast<float>(x), GroundTileLayerY, static_cast<float>(z)}});
+    }
   }
 }
 
@@ -1063,7 +1076,7 @@ TileSet loadTileSet(const std::filesystem::path &directory) {
     parseTileMetadata(metadataPath, atlasIndex, tileSet.tiles);
   }
 
-  buildDemoTilePlacements(tileSet);
+  buildGroundTilePlacements(tileSet);
   std::cout << "Loaded " << tileSet.tiles.size() << " tile definition(s) from "
             << tileSet.atlases.size() << " atlas texture(s).\n";
   return tileSet;
@@ -1942,7 +1955,9 @@ void drawTileSet(const TileSet &tileSet, const Camera &camera) {
   glAlphaFunc(GL_GREATER, 0.01F);
   glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
 
-  for (const PlacedTile &placedTile : tileSet.demoTiles) {
+  glDepthMask(GL_FALSE);
+
+  for (const PlacedTile &placedTile : tileSet.groundTiles) {
     if (placedTile.tileIndex >= tileSet.tiles.size()) {
       continue;
     }
@@ -1950,6 +1965,7 @@ void drawTileSet(const TileSet &tileSet, const Camera &camera) {
                    placedTile.position, camera);
   }
 
+  glDepthMask(GL_TRUE);
   glBindTexture(GL_TEXTURE_2D, 0);
   glDisable(GL_ALPHA_TEST);
   glDisable(GL_BLEND);
@@ -2071,8 +2087,8 @@ void renderScene(const Camera &camera, const Character &character,
   loadMatrix(GL_PROJECTION, projection);
   loadMatrix(GL_MODELVIEW, camera.viewMatrix());
 
-  drawGroundGrid();
   drawTileSet(tileSet, camera);
+  drawGroundGrid();
 
   glPushMatrix();
   glTranslatef(character.position.x, character.position.y,
