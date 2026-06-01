@@ -67,6 +67,9 @@ constexpr const char *IdleTurn180LAnimationPath =
 constexpr const char *IdleTurn180RAnimationPath =
     "media/anim_x/bob/Bob_IdleTurn180R.fbx";
 constexpr const char *BodyTexturePath = "media/textures/Body/MaleBody01.png";
+constexpr const char *Tiles1xTexturePackPath = "media/texturepacks/Tiles1x";
+constexpr float TileSpriteWorldScale = 1.0F / 64.0F;
+constexpr int MaxDemoTiles = 64;
 
 struct Vertex {
   glm::vec3 position{};
@@ -103,6 +106,35 @@ struct PngImage {
   std::vector<unsigned char> pixels;
 
   [[nodiscard]] bool isLoaded() const { return !pixels.empty(); }
+};
+
+struct TileDefinition {
+  std::string name;
+  std::size_t atlasIndex = 0;
+  glm::ivec2 position{0, 0};
+  glm::ivec2 size{0, 0};
+  glm::ivec2 frameOffset{0, 0};
+  glm::ivec2 frameSize{64, 128};
+};
+
+struct TileAtlas {
+  Texture2D texture;
+  std::filesystem::path imagePath;
+};
+
+struct PlacedTile {
+  std::size_t tileIndex = 0;
+  glm::vec3 position{0.0F, 0.0F, 0.0F};
+};
+
+struct TileSet {
+  std::vector<TileAtlas> atlases;
+  std::vector<TileDefinition> tiles;
+  std::vector<PlacedTile> demoTiles;
+
+  [[nodiscard]] bool isLoaded() const {
+    return !atlases.empty() && !tiles.empty();
+  }
 };
 
 struct SkeletonNode {
@@ -842,6 +874,184 @@ Texture2D loadTexture2D(const std::filesystem::path &path) {
   std::cout << "Loaded texture " << path << " (" << texture.width << "x"
             << texture.height << ").\n";
   return texture;
+}
+
+std::string trimWhitespace(std::string value) {
+  const auto first =
+      std::find_if_not(value.begin(), value.end(), [](unsigned char character) {
+        return std::isspace(character) != 0;
+      });
+  const auto last = std::find_if_not(value.rbegin(), value.rend(),
+                                     [](unsigned char character) {
+                                       return std::isspace(character) != 0;
+                                     })
+                        .base();
+  if (first >= last) {
+    return {};
+  }
+  return {first, last};
+}
+
+std::string stripTomlComment(const std::string &line) {
+  const std::size_t commentPosition = line.find('#');
+  return commentPosition == std::string::npos ? line
+                                              : line.substr(0, commentPosition);
+}
+
+std::vector<int> parseTomlIntegerArray(const std::vector<std::string> &lines,
+                                       std::size_t &lineIndex) {
+  std::vector<int> values;
+  std::string combined = stripTomlComment(lines[lineIndex]);
+  while (combined.find(']') == std::string::npos &&
+         lineIndex + 1 < lines.size()) {
+    ++lineIndex;
+    combined += stripTomlComment(lines[lineIndex]);
+  }
+
+  std::string number;
+  for (char character : combined) {
+    if (std::isdigit(static_cast<unsigned char>(character)) != 0 ||
+        character == '-') {
+      number.push_back(character);
+      continue;
+    }
+
+    if (!number.empty()) {
+      values.push_back(std::stoi(number));
+      number.clear();
+    }
+  }
+  if (!number.empty()) {
+    values.push_back(std::stoi(number));
+  }
+  return values;
+}
+
+void parseTileMetadata(const std::filesystem::path &metadataPath,
+                       std::size_t atlasIndex,
+                       std::vector<TileDefinition> &tiles) {
+  std::ifstream file(metadataPath);
+  if (!file) {
+    std::cerr << "Tile metadata file was not found: " << metadataPath << "\n";
+    return;
+  }
+
+  std::vector<std::string> lines;
+  std::string line;
+  while (std::getline(file, line)) {
+    lines.push_back(line);
+  }
+
+  TileDefinition currentTile;
+  bool hasCurrentTile = false;
+  auto commitTile = [&]() {
+    if (!hasCurrentTile || currentTile.name.empty()) {
+      return;
+    }
+    if (currentTile.size.x <= 0 || currentTile.size.y <= 0 ||
+        currentTile.frameSize.x <= 0 || currentTile.frameSize.y <= 0) {
+      std::cerr << "Skipping incomplete tile metadata entry '"
+                << currentTile.name << "' from " << metadataPath << "\n";
+      return;
+    }
+    tiles.push_back(currentTile);
+  };
+
+  for (std::size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
+    const std::string trimmed =
+        trimWhitespace(stripTomlComment(lines[lineIndex]));
+    if (trimmed.empty()) {
+      continue;
+    }
+
+    if (trimmed.front() == '[' && trimmed.back() == ']') {
+      commitTile();
+      currentTile = TileDefinition{};
+      currentTile.name = trimmed.substr(1, trimmed.size() - 2);
+      currentTile.atlasIndex = atlasIndex;
+      hasCurrentTile = true;
+      continue;
+    }
+
+    const std::size_t equalsPosition = trimmed.find('=');
+    if (!hasCurrentTile || equalsPosition == std::string::npos) {
+      continue;
+    }
+
+    const std::string key = trimWhitespace(trimmed.substr(0, equalsPosition));
+    std::vector<int> values = parseTomlIntegerArray(lines, lineIndex);
+    if (values.size() < 2) {
+      continue;
+    }
+
+    if (key == "pos") {
+      currentTile.position = {values[0], values[1]};
+    } else if (key == "size") {
+      currentTile.size = {values[0], values[1]};
+    } else if (key == "frame_offset") {
+      currentTile.frameOffset = {values[0], values[1]};
+    } else if (key == "frame_size") {
+      currentTile.frameSize = {values[0], values[1]};
+    }
+  }
+
+  commitTile();
+}
+
+void buildDemoTilePlacements(TileSet &tileSet) {
+  tileSet.demoTiles.clear();
+  const std::size_t tileCount =
+      std::min<std::size_t>(tileSet.tiles.size(), MaxDemoTiles);
+  if (tileCount == 0) {
+    return;
+  }
+
+  const int gridWidth = static_cast<int>(std::ceil(std::sqrt(tileCount)));
+  for (std::size_t tileIndex = 0; tileIndex < tileCount; ++tileIndex) {
+    const int x = static_cast<int>(tileIndex % gridWidth);
+    const int z = static_cast<int>(tileIndex / gridWidth);
+    tileSet.demoTiles.push_back(PlacedTile{
+        tileIndex,
+        {static_cast<float>(x) - static_cast<float>(gridWidth) * 0.5F, 0.02F,
+         static_cast<float>(z) - 3.0F}});
+  }
+}
+
+TileSet loadTileSet(const std::filesystem::path &directory) {
+  TileSet tileSet;
+  if (!std::filesystem::exists(directory)) {
+    std::cerr << "Tile texture pack directory was not found: " << directory
+              << "\n";
+    return tileSet;
+  }
+
+  std::vector<std::filesystem::path> imagePaths;
+  for (const std::filesystem::directory_entry &entry :
+       std::filesystem::directory_iterator(directory)) {
+    if (entry.is_regular_file() && entry.path().extension() == ".png") {
+      imagePaths.push_back(entry.path());
+    }
+  }
+  std::sort(imagePaths.begin(), imagePaths.end());
+
+  for (const std::filesystem::path &imagePath : imagePaths) {
+    Texture2D texture = loadTexture2D(imagePath);
+    if (!texture.isLoaded()) {
+      continue;
+    }
+
+    const std::size_t atlasIndex = tileSet.atlases.size();
+    tileSet.atlases.push_back(TileAtlas{texture, imagePath});
+
+    const std::filesystem::path metadataPath =
+        imagePath.parent_path() / (imagePath.stem().string() + ".toml");
+    parseTileMetadata(metadataPath, atlasIndex, tileSet.tiles);
+  }
+
+  buildDemoTilePlacements(tileSet);
+  std::cout << "Loaded " << tileSet.tiles.size() << " tile definition(s) from "
+            << tileSet.atlases.size() << " atlas texture(s).\n";
+  return tileSet;
 }
 
 void errorCallback(int error, const char *description) {
@@ -1651,6 +1861,86 @@ blendBoneMatrices(const std::vector<glm::mat4> &sourceBoneMatrices,
   return blendedBoneMatrices;
 }
 
+void drawTileSprite(const TileSet &tileSet, const TileDefinition &tile,
+                    const glm::vec3 &worldPosition, const Camera &camera) {
+  if (tile.atlasIndex >= tileSet.atlases.size()) {
+    return;
+  }
+
+  const TileAtlas &atlas = tileSet.atlases[tile.atlasIndex];
+  if (!atlas.texture.isLoaded()) {
+    return;
+  }
+
+  const glm::vec3 screenRight = camera.right();
+  const glm::vec3 screenUp =
+      glm::normalize(glm::cross(screenRight, camera.forward()));
+  const float left = (static_cast<float>(tile.frameOffset.x) -
+                      static_cast<float>(tile.frameSize.x) * 0.5F) *
+                     TileSpriteWorldScale;
+  const float right =
+      left + static_cast<float>(tile.size.x) * TileSpriteWorldScale;
+  const float top =
+      (static_cast<float>(tile.frameSize.y - tile.frameOffset.y)) *
+      TileSpriteWorldScale;
+  const float bottom =
+      top - static_cast<float>(tile.size.y) * TileSpriteWorldScale;
+
+  const float u0 = static_cast<float>(tile.position.x) /
+                   static_cast<float>(atlas.texture.width);
+  const float u1 = static_cast<float>(tile.position.x + tile.size.x) /
+                   static_cast<float>(atlas.texture.width);
+  const float v0 = 1.0F - static_cast<float>(tile.position.y + tile.size.y) /
+                              static_cast<float>(atlas.texture.height);
+  const float v1 = 1.0F - static_cast<float>(tile.position.y) /
+                              static_cast<float>(atlas.texture.height);
+
+  glBindTexture(GL_TEXTURE_2D, atlas.texture.id);
+  glBegin(GL_QUADS);
+  glTexCoord2f(u0, v0);
+  const glm::vec3 bottomLeft =
+      worldPosition + screenRight * left + screenUp * bottom;
+  glVertex3f(bottomLeft.x, bottomLeft.y, bottomLeft.z);
+  glTexCoord2f(u1, v0);
+  const glm::vec3 bottomRight =
+      worldPosition + screenRight * right + screenUp * bottom;
+  glVertex3f(bottomRight.x, bottomRight.y, bottomRight.z);
+  glTexCoord2f(u1, v1);
+  const glm::vec3 topRight =
+      worldPosition + screenRight * right + screenUp * top;
+  glVertex3f(topRight.x, topRight.y, topRight.z);
+  glTexCoord2f(u0, v1);
+  const glm::vec3 topLeft = worldPosition + screenRight * left + screenUp * top;
+  glVertex3f(topLeft.x, topLeft.y, topLeft.z);
+  glEnd();
+}
+
+void drawTileSet(const TileSet &tileSet, const Camera &camera) {
+  if (!tileSet.isLoaded()) {
+    return;
+  }
+
+  glEnable(GL_TEXTURE_2D);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glEnable(GL_ALPHA_TEST);
+  glAlphaFunc(GL_GREATER, 0.01F);
+  glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
+
+  for (const PlacedTile &placedTile : tileSet.demoTiles) {
+    if (placedTile.tileIndex >= tileSet.tiles.size()) {
+      continue;
+    }
+    drawTileSprite(tileSet, tileSet.tiles[placedTile.tileIndex],
+                   placedTile.position, camera);
+  }
+
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glDisable(GL_ALPHA_TEST);
+  glDisable(GL_BLEND);
+  glDisable(GL_TEXTURE_2D);
+}
+
 void configureOpenGl() {
   glEnable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
@@ -1753,7 +2043,8 @@ boneMatricesForCharacter(const Character &character, const Model &bodyModel,
 void renderScene(const Camera &camera, const Character &character,
                  const Model &bodyModel, const Texture2D &bodyTexture,
                  const CharacterAnimationClips &animations,
-                 int framebufferWidth, int framebufferHeight) {
+                 const TileSet &tileSet, int framebufferWidth,
+                 int framebufferHeight) {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   const float aspectRatio = framebufferHeight > 0
@@ -1767,6 +2058,7 @@ void renderScene(const Camera &camera, const Character &character,
   loadMatrix(GL_MODELVIEW, camera.viewMatrix());
 
   drawGroundGrid();
+  drawTileSet(tileSet, camera);
 
   glPushMatrix();
   glTranslatef(character.position.x, character.position.y,
@@ -1823,6 +2115,7 @@ int main() {
 
   const Model bodyModel = loadModel(BodyModelPath);
   const Texture2D bodyTexture = loadTexture2D(BodyTexturePath);
+  const TileSet tileSet = loadTileSet(Tiles1xTexturePackPath);
   CharacterAnimationClips animations;
   animations.idle = loadAnimationClip(IdleAnimationPath, "Bob_Idle");
   animations.idleToWalk =
@@ -1867,7 +2160,7 @@ int main() {
     int framebufferHeight = 0;
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
     renderScene(input.camera, input.character, bodyModel, bodyTexture,
-                animations, framebufferWidth, framebufferHeight);
+                animations, tileSet, framebufferWidth, framebufferHeight);
 
     glfwSwapBuffers(window);
     glfwPollEvents();
