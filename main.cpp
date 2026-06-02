@@ -1286,7 +1286,18 @@ void buildGroundTilePlacements(TileSet &tileSet) {
           GroundWorldLevel,
           0});
     }
+
+    appendCurrentTile();
+    std::sort(tileSet.mapTiles.begin(), tileSet.mapTiles.end(),
+              PlacedTileDrawOrderLess{});
+    std::cout << "Loaded " << tileSet.mapTiles.size()
+              << " saved map tile(s) from " << mapPath << ".\n";
   }
+};
+
+void loadDefaultSavedMapTiles(TileSet &tileSet) {
+  SavedMapTileLoader loader{DefaultMapPath, tileSet, {}};
+  loader.load();
 }
 
 struct PlacedTileDrawOrderLess {
