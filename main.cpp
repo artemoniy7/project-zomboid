@@ -1510,24 +1510,38 @@ void loadMatrix(GLenum matrixMode, const glm::mat4 &matrix) {
 }
 
 void drawGroundGrid(const TileSet &tileSet) {
-  const float cellSize = tileSet.worldGridCellSize > 0.0F
-                             ? tileSet.worldGridCellSize
-                             : FallbackWorldGridCellSize;
-  const float minCoordinate =
-      (static_cast<float>(-GroundTileHalfSize) - 0.5F) * cellSize;
-  const float maxCoordinate =
-      (static_cast<float>(GroundTileHalfSize) + 0.5F) * cellSize;
+  float minX = static_cast<float>(-GroundTileHalfSize);
+  float maxX = static_cast<float>(GroundTileHalfSize);
+  float minZ = static_cast<float>(-GroundTileHalfSize);
+  float maxZ = static_cast<float>(GroundTileHalfSize);
+
+  if (!tileSet.groundTiles.empty()) {
+    minX = tileSet.groundTiles.front().position.x;
+    maxX = minX;
+    minZ = tileSet.groundTiles.front().position.z;
+    maxZ = minZ;
+    for (const PlacedTile &placedTile : tileSet.groundTiles) {
+      minX = std::min(minX, placedTile.position.x);
+      maxX = std::max(maxX, placedTile.position.x);
+      minZ = std::min(minZ, placedTile.position.z);
+      maxZ = std::max(maxZ, placedTile.position.z);
+    }
+  }
+
+  const float minBoundaryX = minX - 0.5F;
+  const float maxBoundaryX = maxX + 0.5F;
+  const float minBoundaryZ = minZ - 0.5F;
+  const float maxBoundaryZ = maxZ + 0.5F;
 
   glColor3f(0.28F, 0.42F, 0.24F);
   glBegin(GL_LINES);
-  for (int boundary = -GroundTileHalfSize; boundary <= GroundTileHalfSize + 1;
-       ++boundary) {
-    const float coordinate =
-        (static_cast<float>(boundary) - 0.5F) * cellSize;
-    glVertex3f(coordinate, 0.0F, minCoordinate);
-    glVertex3f(coordinate, 0.0F, maxCoordinate);
-    glVertex3f(minCoordinate, 0.0F, coordinate);
-    glVertex3f(maxCoordinate, 0.0F, coordinate);
+  for (float x = minBoundaryX; x <= maxBoundaryX + 0.001F; x += 1.0F) {
+    glVertex3f(x, 0.0F, minBoundaryZ);
+    glVertex3f(x, 0.0F, maxBoundaryZ);
+  }
+  for (float z = minBoundaryZ; z <= maxBoundaryZ + 0.001F; z += 1.0F) {
+    glVertex3f(minBoundaryX, 0.0F, z);
+    glVertex3f(maxBoundaryX, 0.0F, z);
   }
   glEnd();
 }
