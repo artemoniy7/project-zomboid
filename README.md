@@ -39,6 +39,18 @@ When the character is on a level/tile position that has no walkable tile under i
 
 Movement speed is controlled by `CharacterMoveSpeed` near the top of `main.cpp`. Looping animation playback speed is controlled separately by `CharacterAnimationPlaybackSpeed`, while one-shot start/stop clips use `CharacterTransitionAnimationPlaybackSpeed` so they can stay snappy without speeding up idle/walk loops. When movement keys are released, `CharacterStopCoastSpeedScale` controls the small decelerating forward coast during `Bob_WalkToStop`. Use values below `1.0F` to slow animation down or above `1.0F` to speed it up.
 
+## Map editor
+
+A Python/Tkinter map editor is available for painting tile maps and saving them under `saves/`:
+
+```bash
+python3 tools/map_editor.py
+python3 tools/map_editor.py media/texturepacks/Tiles1x
+python3 tools/map_editor.py media/texturepacks/Tiles1x/Tiles_Test.png --map saves/map_01.toml
+```
+
+The editor uses the same tile browser pattern as the collision editor: open a texture-pack folder or one PNG atlas from `media/texturepacks`, filter/select tiles from the atlas list, then left-click cells to place tiles and right-click to erase them. Use the **Level** control to edit world levels from `-10` to `10`; **Save map** / **Save map as** writes TOML maps into the `saves/` folder.
+
 ## Collision editor
 
 A small Python/Tkinter utility is available for authoring per-tile collision metadata without hard-coding shapes in C++:
