@@ -29,6 +29,16 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 
 Movement speed is controlled by `CharacterMoveSpeed` near the top of `main.cpp`. Looping animation playback speed is controlled separately by `CharacterAnimationPlaybackSpeed`, while one-shot start/stop clips use `CharacterTransitionAnimationPlaybackSpeed` so they can stay snappy without speeding up idle/walk loops. When movement keys are released, `CharacterStopCoastSpeedScale` controls the small decelerating forward coast during `Bob_WalkToStop`. Use values below `1.0F` to slow animation down or above `1.0F` to speed it up.
 
+## Collision editor
+
+A small Python/Tkinter utility is available for authoring per-tile collision metadata without hard-coding shapes in C++:
+
+```bash
+python3 tools/collision_editor.py media/texturepacks/Tiles1x
+```
+
+Use **Open folder** to choose a texture-pack directory containing atlas `.png` files and matching tile `.toml` metadata. Select a tile, draw rectangle or circle collision shapes over the visible sprite, or add a full-tile collision. **Save collisions.toml** writes normalized collision data next to the tile metadata. The engine loads `collisions.toml` from the same texture-pack directory at startup and reports how many collision shapes were found; movement resolution can then consume those definitions when the collision world is wired in.
+
 ## Build
 
 Install development packages for GLFW, GLM, OpenGL, and Assimp, then run:

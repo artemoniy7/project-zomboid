@@ -122,6 +122,20 @@ struct TileDefinition {
   glm::ivec2 frameSize{64, 128};
 };
 
+enum class CollisionShapeType { None, FullTile, Aabb, Circle };
+
+struct CollisionShape {
+  CollisionShapeType type = CollisionShapeType::None;
+  glm::vec2 min{0.0F, 0.0F};
+  glm::vec2 max{1.0F, 1.0F};
+  glm::vec2 center{0.5F, 0.5F};
+  float radius = 0.25F;
+};
+
+struct TileCollisionDefinition {
+  std::vector<CollisionShape> shapes;
+};
+
 struct TileAtlas {
   Texture2D texture;
   std::filesystem::path imagePath;
@@ -136,6 +150,8 @@ struct TileSet {
   std::vector<TileAtlas> atlases;
   std::vector<TileDefinition> tiles;
   std::vector<PlacedTile> groundTiles;
+  std::unordered_map<std::string, TileCollisionDefinition>
+      collisionDefinitions;
   float groundTileCellSize = FallbackGroundTileCellSize;
 
   [[nodiscard]] bool isLoaded() const {
@@ -946,6 +962,142 @@ std::vector<int> parseTomlIntegerArray(const std::vector<std::string> &lines,
   return values;
 }
 
+std::string parseTomlStringValue(std::string value) {
+  value = trimWhitespace(std::move(value));
+  if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+    value = value.substr(1, value.size() - 2);
+  }
+  return value;
+}
+
+std::vector<float> parseTomlFloatArray(const std::vector<std::string> &lines,
+                                       std::size_t &lineIndex) {
+  std::vector<float> values;
+  std::string combined = stripTomlComment(lines[lineIndex]);
+  while (combined.find(']') == std::string::npos &&
+         lineIndex + 1 < lines.size()) {
+    ++lineIndex;
+    combined += stripTomlComment(lines[lineIndex]);
+  }
+
+  std::string number;
+  for (char character : combined) {
+    if (std::isdigit(static_cast<unsigned char>(character)) != 0 ||
+        character == '-' || character == '+' || character == '.') {
+      number.push_back(character);
+      continue;
+    }
+
+    if (!number.empty()) {
+      values.push_back(std::stof(number));
+      number.clear();
+    }
+  }
+  if (!number.empty()) {
+    values.push_back(std::stof(number));
+  }
+  return values;
+}
+
+CollisionShapeType collisionShapeTypeFromString(const std::string &value) {
+  if (value == "full_tile") {
+    return CollisionShapeType::FullTile;
+  }
+  if (value == "aabb") {
+    return CollisionShapeType::Aabb;
+  }
+  if (value == "circle") {
+    return CollisionShapeType::Circle;
+  }
+  return CollisionShapeType::None;
+}
+
+void parseTileCollisionMetadata(
+    const std::filesystem::path &metadataPath,
+    std::unordered_map<std::string, TileCollisionDefinition> &definitions) {
+  std::ifstream file(metadataPath);
+  if (!file) {
+    return;
+  }
+
+  std::vector<std::string> lines;
+  std::string line;
+  while (std::getline(file, line)) {
+    lines.push_back(line);
+  }
+
+  std::string currentTileName;
+  CollisionShape currentShape;
+  bool hasCurrentShape = false;
+
+  auto commitShape = [&]() {
+    if (currentTileName.empty() || !hasCurrentShape ||
+        currentShape.type == CollisionShapeType::None) {
+      hasCurrentShape = false;
+      return;
+    }
+    definitions[currentTileName].shapes.push_back(currentShape);
+    currentShape = CollisionShape{};
+    hasCurrentShape = false;
+  };
+
+  for (std::size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
+    const std::string trimmed =
+        trimWhitespace(stripTomlComment(lines[lineIndex]));
+    if (trimmed.empty()) {
+      continue;
+    }
+
+    if (trimmed == "[[tiles]]") {
+      commitShape();
+      currentTileName.clear();
+      continue;
+    }
+    if (trimmed == "[[tiles.shapes]]") {
+      commitShape();
+      currentShape = CollisionShape{};
+      hasCurrentShape = true;
+      continue;
+    }
+
+    const std::size_t equalsPosition = trimmed.find('=');
+    if (equalsPosition == std::string::npos) {
+      continue;
+    }
+
+    const std::string key = trimWhitespace(trimmed.substr(0, equalsPosition));
+    const std::string value =
+        trimWhitespace(trimmed.substr(equalsPosition + 1));
+    if (key == "name") {
+      commitShape();
+      currentTileName = parseTomlStringValue(value);
+      definitions.try_emplace(currentTileName);
+    } else if (hasCurrentShape && key == "type") {
+      currentShape.type = collisionShapeTypeFromString(
+          parseTomlStringValue(value));
+    } else if (hasCurrentShape && key == "min") {
+      const std::vector<float> values = parseTomlFloatArray(lines, lineIndex);
+      if (values.size() >= 2) {
+        currentShape.min = {values[0], values[1]};
+      }
+    } else if (hasCurrentShape && key == "max") {
+      const std::vector<float> values = parseTomlFloatArray(lines, lineIndex);
+      if (values.size() >= 2) {
+        currentShape.max = {values[0], values[1]};
+      }
+    } else if (hasCurrentShape && key == "center") {
+      const std::vector<float> values = parseTomlFloatArray(lines, lineIndex);
+      if (values.size() >= 2) {
+        currentShape.center = {values[0], values[1]};
+      }
+    } else if (hasCurrentShape && key == "radius") {
+      currentShape.radius = std::stof(value);
+    }
+  }
+
+  commitShape();
+}
+
 void parseTileMetadata(const std::filesystem::path &metadataPath,
                        std::size_t atlasIndex,
                        std::vector<TileDefinition> &tiles) {
@@ -1093,9 +1245,17 @@ TileSet loadTileSet(const std::filesystem::path &directory) {
     parseTileMetadata(metadataPath, atlasIndex, tileSet.tiles);
   }
 
+  parseTileCollisionMetadata(directory / "collisions.toml",
+                             tileSet.collisionDefinitions);
+
   buildGroundTilePlacements(tileSet);
+  std::size_t collisionShapeCount = 0;
+  for (const auto &entry : tileSet.collisionDefinitions) {
+    collisionShapeCount += entry.second.shapes.size();
+  }
   std::cout << "Loaded " << tileSet.tiles.size() << " tile definition(s) from "
-            << tileSet.atlases.size() << " atlas texture(s).\n";
+            << tileSet.atlases.size() << " atlas texture(s), plus "
+            << collisionShapeCount << " collision shape(s).\n";
   return tileSet;
 }
 
