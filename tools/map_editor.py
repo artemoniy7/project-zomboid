@@ -9,6 +9,7 @@ those tiles on discrete world levels, and saves map files into ``saves/``.
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import tkinter as tk
 from dataclasses import dataclass, field
@@ -580,11 +581,8 @@ class MapEditor(tk.Tk):
 
     def placement_cell_offset(self) -> tuple[float, float]:
         return (
-            TILE_MAP_SCREEN_RIGHT_ALIGNMENT_CELLS - TILE_MAP_SCREEN_UP_ALIGNMENT_CELLS,
-            -(
-                TILE_MAP_SCREEN_RIGHT_ALIGNMENT_CELLS
-                + TILE_MAP_SCREEN_UP_ALIGNMENT_CELLS
-            ),
+            TILE_MAP_SCREEN_RIGHT_ALIGNMENT_CELLS,
+            TILE_MAP_SCREEN_UP_ALIGNMENT_CELLS,
         )
 
     def placement_to_screen(self, x: int, z: int) -> tuple[float, float]:
@@ -608,9 +606,8 @@ class MapEditor(tk.Tk):
         origin_x, origin_y = self.map_origin()
         dx = (screen_x - origin_x) / (TILE_SCREEN_WIDTH * 0.5)
         dz = (screen_y - origin_y) / (TILE_SCREEN_HEIGHT * 0.5)
-        offset_x, offset_z = self.placement_cell_offset()
-        x = round((dx + dz) * 0.5 - offset_x)
-        z = round((dz - dx) * 0.5 - offset_z)
+        x = math.floor((dx + dz) * 0.5)
+        z = math.floor((dz - dx) * 0.5)
         return x, z
 
     def current_level(self) -> int:

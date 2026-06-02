@@ -137,7 +137,15 @@ struct TileDefinition {
   glm::ivec2 frameSize{64, 128};
 };
 
-enum class CollisionShapeType { None, FullTile, Floor, Aabb, Circle, Segment };
+enum class CollisionShapeType {
+  None,
+  FullTile,
+  Floor,
+  Aabb,
+  Circle,
+  Diamond,
+  Segment
+};
 
 struct CollisionShape {
   CollisionShapeType type = CollisionShapeType::None;
@@ -1039,6 +1047,9 @@ CollisionShapeType collisionShapeTypeFromString(const std::string &value) {
   if (value == "circle") {
     return CollisionShapeType::Circle;
   }
+  if (value == "diamond") {
+    return CollisionShapeType::Diamond;
+  }
   if (value == "segment") {
     return CollisionShapeType::Segment;
   }
@@ -1741,6 +1752,16 @@ bool collisionShapeContainsSpritePoint(const CollisionShape &shape,
   case CollisionShapeType::Aabb:
     return point.x >= shape.min.x && point.x <= shape.max.x &&
            point.y >= shape.min.y && point.y <= shape.max.y;
+  case CollisionShapeType::Diamond: {
+    const glm::vec2 center = (shape.min + shape.max) * 0.5F;
+    const glm::vec2 halfSize = (shape.max - shape.min) * 0.5F;
+    if (halfSize.x <= std::numeric_limits<float>::epsilon() ||
+        halfSize.y <= std::numeric_limits<float>::epsilon()) {
+      return false;
+    }
+    const glm::vec2 relative = glm::abs(point - center);
+    return relative.x / halfSize.x + relative.y / halfSize.y <= 1.0F;
+  }
   case CollisionShapeType::Circle: {
     const float spriteWidth = static_cast<float>(tile.size.x > 0 ? tile.size.x
                                                                  : tile.frameSize.x);
