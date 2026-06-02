@@ -23,8 +23,8 @@ MAX_LEVEL = 10
 MAP_HALF_SIZE = 20
 TILE_SCREEN_WIDTH = 64
 TILE_SCREEN_HEIGHT = 32
-TILE_SCREEN_RIGHT_ALIGNMENT_CELLS = 0.5
-TILE_SCREEN_UP_ALIGNMENT_CELLS = 0.5
+TILE_MAP_SCREEN_RIGHT_ALIGNMENT_CELLS = 0.5
+TILE_MAP_SCREEN_UP_ALIGNMENT_CELLS = 0.5
 CANVAS_PADDING = 160
 PNG_FILETYPES = (("PNG atlas", ("*.png", "*.PNG")), ("All files", "*.*"))
 MAP_FILETYPES = (("Map TOML", ("*.toml", "*.TOML")), ("All files", "*.*"))
@@ -571,19 +571,33 @@ class MapEditor(tk.Tk):
         width = int(self.map_canvas.winfo_width() or 900)
         return width // 2, CANVAS_PADDING + MAP_HALF_SIZE * TILE_SCREEN_HEIGHT // 2
 
-    def cell_to_screen(self, x: int, z: int) -> tuple[float, float]:
+    def cell_to_screen(self, x: float, z: float) -> tuple[float, float]:
         origin_x, origin_y = self.map_origin()
         return (
             origin_x + (x - z) * TILE_SCREEN_WIDTH * 0.5,
             origin_y + (x + z) * TILE_SCREEN_HEIGHT * 0.5,
         )
 
+    def placement_cell_offset(self) -> tuple[float, float]:
+        return (
+            TILE_MAP_SCREEN_RIGHT_ALIGNMENT_CELLS - TILE_MAP_SCREEN_UP_ALIGNMENT_CELLS,
+            -(
+                TILE_MAP_SCREEN_RIGHT_ALIGNMENT_CELLS
+                + TILE_MAP_SCREEN_UP_ALIGNMENT_CELLS
+            ),
+        )
+
+    def placement_to_screen(self, x: int, z: int) -> tuple[float, float]:
+        offset_x, offset_z = self.placement_cell_offset()
+        return self.cell_to_screen(x + offset_x, z + offset_z)
+
     def screen_to_cell(self, screen_x: float, screen_y: float) -> tuple[int, int]:
         origin_x, origin_y = self.map_origin()
         dx = (screen_x - origin_x) / (TILE_SCREEN_WIDTH * 0.5)
         dz = (screen_y - origin_y) / (TILE_SCREEN_HEIGHT * 0.5)
-        x = round((dx + dz) * 0.5)
-        z = round((dz - dx) * 0.5)
+        offset_x, offset_z = self.placement_cell_offset()
+        x = round((dx + dz) * 0.5 - offset_x)
+        z = round((dz - dx) * 0.5 - offset_z)
         return x, z
 
     def current_level(self) -> int:
@@ -643,6 +657,11 @@ class MapEditor(tk.Tk):
 
     def draw_cell_outline(self, x: int, z: int, color: str, width: int = 1) -> None:
         cx, cy = self.cell_to_screen(x, z)
+        self.draw_cell_outline_at(cx, cy, color, width)
+
+    def draw_cell_outline_at(
+        self, cx: float, cy: float, color: str, width: int = 1
+    ) -> None:
         points = [
             cx,
             cy - TILE_SCREEN_HEIGHT * 0.5,
@@ -657,9 +676,9 @@ class MapEditor(tk.Tk):
 
     def draw_placement(self, layer: int, x: int, z: int, saved_tile: MapTile) -> None:
         outline = "#ffd000" if layer == self.current_layer() else "#4f8cff"
-        self.draw_cell_outline(x, z, outline, width=2)
+        cx, cy = self.placement_to_screen(x, z)
+        self.draw_cell_outline_at(cx, cy, outline, width=2)
         tile = self.tile_by_saved_ref(saved_tile)
-        cx, cy = self.cell_to_screen(x, z)
         if tile is None:
             self.map_canvas.create_text(
                 cx,
@@ -671,11 +690,7 @@ class MapEditor(tk.Tk):
             return
         image = self.tile_sprite_image(tile)
         self.placement_images.append(image)
-        aligned_x = cx + TILE_SCREEN_WIDTH * TILE_SCREEN_RIGHT_ALIGNMENT_CELLS
-        aligned_y = cy - TILE_SCREEN_HEIGHT * TILE_SCREEN_UP_ALIGNMENT_CELLS
-        self.map_canvas.create_image(
-            aligned_x, aligned_y, anchor=tk.CENTER, image=image
-        )
+        self.map_canvas.create_image(cx, cy, anchor=tk.CENTER, image=image)
 
     def on_map_motion(self, event: tk.Event) -> None:
         x, z = self.screen_to_cell(event.x, event.y)

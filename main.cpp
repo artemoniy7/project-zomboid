@@ -82,8 +82,8 @@ constexpr const char *GroundTileName = "blends_natural_01_TEST_22";
 constexpr int GroundTileHalfSize = 20;
 constexpr float GroundTileLayerY = -0.01F;
 constexpr float FallbackGroundTileCellSize = 0.70710678F;
-constexpr float TileScreenRightAlignmentCells = 0.5F;
-constexpr float TileScreenUpAlignmentCells = 0.5F;
+constexpr float TileMapScreenRightAlignmentCells = 0.5F;
+constexpr float TileMapScreenUpAlignmentCells = 0.5F;
 constexpr float LevelHeightInSpritePixels = 128.0F;
 constexpr float WorldLevelHeight =
     LevelHeightInSpritePixels * TileSpriteWorldScale;
@@ -1243,6 +1243,17 @@ std::size_t findTileIndexBySavedReference(const TileSet &tileSet,
   return findTileIndexByName(tileSet, tileName);
 }
 
+glm::vec3 mapTileAlignmentWorldOffset(float cellSize) {
+  const float safeCellSize =
+      cellSize > 0.0F ? cellSize : FallbackGroundTileCellSize;
+  return {
+      (TileMapScreenRightAlignmentCells - TileMapScreenUpAlignmentCells) *
+          safeCellSize,
+      0.0F,
+      -(TileMapScreenRightAlignmentCells + TileMapScreenUpAlignmentCells) *
+          safeCellSize};
+}
+
 float groundTileCellSizeForTile(const TileDefinition &tile) {
   const int pixelWidth = tile.size.x > 0 ? tile.size.x : tile.frameSize.x;
   const float spriteWidth =
@@ -1275,7 +1286,18 @@ void buildGroundTilePlacements(TileSet &tileSet) {
           GroundWorldLevel,
           0});
     }
+
+    appendCurrentTile();
+    std::sort(tileSet.mapTiles.begin(), tileSet.mapTiles.end(),
+              PlacedTileDrawOrderLess{});
+    std::cout << "Loaded " << tileSet.mapTiles.size()
+              << " saved map tile(s) from " << mapPath << ".\n";
   }
+};
+
+void loadDefaultSavedMapTiles(TileSet &tileSet) {
+  SavedMapTileLoader loader{DefaultMapPath, tileSet, {}};
+  loader.load();
 }
 
 struct PlacedTileDrawOrderLess {
@@ -1331,13 +1353,17 @@ struct SavedMapTileLoader {
       return;
     }
 
-    tileSet.mapTiles.push_back(PlacedTile{
-        tileIndex,
-        {static_cast<float>(currentTile.x) * tileSet.groundTileCellSize,
-         static_cast<float>(currentTile.level) * WorldLevelHeight,
-         static_cast<float>(currentTile.z) * tileSet.groundTileCellSize},
-        currentTile.level,
-        currentTile.layer});
+    const glm::vec3 alignmentOffset =
+        mapTileAlignmentWorldOffset(tileSet.groundTileCellSize);
+    const glm::vec3 worldPosition{
+        static_cast<float>(currentTile.x) * tileSet.groundTileCellSize +
+            alignmentOffset.x,
+        static_cast<float>(currentTile.level) * WorldLevelHeight,
+        static_cast<float>(currentTile.z) * tileSet.groundTileCellSize +
+            alignmentOffset.z};
+    tileSet.mapTiles.push_back(PlacedTile{tileIndex, worldPosition,
+                                           currentTile.level,
+                                           currentTile.layer});
   }
 
   void parseKeyValue(const std::string &key, const std::string &value) {
@@ -1395,8 +1421,7 @@ struct SavedMapTileLoader {
 };
 
 void loadDefaultSavedMapTiles(TileSet &tileSet) {
-  SavedMapTileLoader loader{DefaultMapPath, tileSet, {}};
-  loader.load();
+  SavedMapTileLoader{DefaultMapPath, tileSet}.load();
 }
 
 TileSet loadTileSet(const std::filesystem::path &directory) {
@@ -2515,19 +2540,14 @@ void drawTileSprite(const TileSet &tileSet, const TileDefinition &tile,
   const glm::vec3 screenUp =
       glm::normalize(glm::cross(screenRight, camera.forward()));
   // Ground metadata can describe a cropped sprite inside a taller logical
-  // frame. Center the visible sprite itself on worldPosition, then apply a
-  // half-grid screen-space correction so authored map tiles sit on the same
-  // visual cell center as the world grid.
+  // frame. Center the visible sprite itself on worldPosition; saved-map tile
+  // alignment is already baked into PlacedTile::position so rendering and
+  // collision use the exact same anchor.
   const float halfWidth =
       static_cast<float>(tile.size.x) * TileSpriteWorldScale * 0.5F;
   const float halfHeight =
       static_cast<float>(tile.size.y) * TileSpriteWorldScale * 0.5F;
-  const float projectedCellWidth = tileSet.groundTileCellSize * std::sqrt(2.0F);
-  const float projectedCellHeight = projectedCellWidth * 0.5F;
-  const glm::vec3 alignedWorldPosition =
-      worldPosition +
-      screenRight * (projectedCellWidth * TileScreenRightAlignmentCells) +
-      screenUp * (projectedCellHeight * TileScreenUpAlignmentCells);
+  const glm::vec3 alignedWorldPosition = worldPosition;
   const float left = -halfWidth;
   const float right = halfWidth;
   const float top = halfHeight;
