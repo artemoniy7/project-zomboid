@@ -75,6 +75,7 @@ constexpr const char *IdleTurn180RAnimationPath =
     "media/anim_x/bob/Bob_IdleTurn180R.fbx";
 constexpr const char *BodyTexturePath = "media/textures/Body/MaleBody01.png";
 constexpr const char *Tiles1xTexturePackPath = "media/texturepacks/Tiles1x";
+constexpr const char *DefaultMapPath = "saves/map_01.toml";
 constexpr float TileSpriteWorldScale = 1.0F / 64.0F;
 constexpr const char *GroundTileName = "blends_natural_01_TEST_22";
 constexpr int GroundTileHalfSize = 20;
@@ -83,8 +84,9 @@ constexpr float FallbackGroundTileCellSize = 0.70710678F;
 constexpr float LevelHeightInSpritePixels = 128.0F;
 constexpr float WorldLevelHeight =
     LevelHeightInSpritePixels * TileSpriteWorldScale;
-constexpr int MinWorldLevel = 0;
-constexpr int MaxWorldLevel = 7;
+constexpr int MinWorldLevel = -10;
+constexpr int GroundWorldLevel = 0;
+constexpr int MaxWorldLevel = 10;
 
 struct Vertex {
   glm::vec3 position{};
@@ -132,7 +134,7 @@ struct TileDefinition {
   glm::ivec2 frameSize{64, 128};
 };
 
-enum class CollisionShapeType { None, FullTile, Aabb, Circle, Segment };
+enum class CollisionShapeType { None, FullTile, Floor, Aabb, Circle, Segment };
 
 struct CollisionShape {
   CollisionShapeType type = CollisionShapeType::None;
@@ -157,12 +159,15 @@ struct TileAtlas {
 struct PlacedTile {
   std::size_t tileIndex = 0;
   glm::vec3 position{0.0F, 0.0F, 0.0F};
+  int level = 0;
+  int layer = 0;
 };
 
 struct TileSet {
   std::vector<TileAtlas> atlases;
   std::vector<TileDefinition> tiles;
   std::vector<PlacedTile> groundTiles;
+  std::vector<PlacedTile> mapTiles;
   std::unordered_map<std::string, TileCollisionDefinition> collisionDefinitions;
   float groundTileCellSize = FallbackGroundTileCellSize;
 
@@ -1020,6 +1025,9 @@ CollisionShapeType collisionShapeTypeFromString(const std::string &value) {
   if (value == "full_tile") {
     return CollisionShapeType::FullTile;
   }
+  if (value == "floor") {
+    return CollisionShapeType::Floor;
+  }
   if (value == "aabb") {
     return CollisionShapeType::Aabb;
   }
@@ -1212,6 +1220,24 @@ std::size_t findTileIndexByName(const TileSet &tileSet,
   return std::numeric_limits<std::size_t>::max();
 }
 
+std::size_t findTileIndexBySavedReference(const TileSet &tileSet,
+                                          const std::string &tileName,
+                                          const std::string &atlasName) {
+  for (std::size_t tileIndex = 0; tileIndex < tileSet.tiles.size();
+       ++tileIndex) {
+    const TileDefinition &tile = tileSet.tiles[tileIndex];
+    if (tile.name != tileName || tile.atlasIndex >= tileSet.atlases.size()) {
+      continue;
+    }
+    if (tileSet.atlases[tile.atlasIndex].imagePath.filename().string() ==
+        atlasName) {
+      return tileIndex;
+    }
+  }
+
+  return findTileIndexByName(tileSet, tileName);
+}
+
 float groundTileCellSizeForTile(const TileDefinition &tile) {
   const int pixelWidth = tile.size.x > 0 ? tile.size.x : tile.frameSize.x;
   const float spriteWidth =
@@ -1240,9 +1266,106 @@ void buildGroundTilePlacements(TileSet &tileSet) {
       tileSet.groundTiles.push_back(PlacedTile{
           groundTileIndex,
           {static_cast<float>(x) * tileSet.groundTileCellSize, GroundTileLayerY,
-           static_cast<float>(z) * tileSet.groundTileCellSize}});
+           static_cast<float>(z) * tileSet.groundTileCellSize},
+          GroundWorldLevel,
+          0});
     }
   }
+}
+
+void loadSavedMapTiles(const std::filesystem::path &mapPath, TileSet &tileSet) {
+  tileSet.mapTiles.clear();
+  std::ifstream file(mapPath);
+  if (!file) {
+    return;
+  }
+
+  int currentLevel = 0;
+  int currentLayer = 0;
+  int currentX = 0;
+  int currentZ = 0;
+  std::string currentTileName;
+  std::string currentAtlasName;
+  bool hasCurrentTile = false;
+
+  auto commitTile = [&]() {
+    if (!hasCurrentTile || currentTileName.empty()) {
+      return;
+    }
+
+    const std::size_t tileIndex = findTileIndexBySavedReference(
+        tileSet, currentTileName, currentAtlasName);
+    if (tileIndex == std::numeric_limits<std::size_t>::max()) {
+      std::cerr << "Saved map tile '" << currentTileName
+                << "' was not found in loaded tile metadata.\n";
+      return;
+    }
+
+    tileSet.mapTiles.push_back(
+        PlacedTile{tileIndex,
+                   {static_cast<float>(currentX) * tileSet.groundTileCellSize,
+                    static_cast<float>(currentLevel) * WorldLevelHeight,
+                    static_cast<float>(currentZ) * tileSet.groundTileCellSize},
+                   currentLevel,
+                   currentLayer});
+  };
+
+  std::string line;
+  while (std::getline(file, line)) {
+    const std::string trimmed = trimWhitespace(stripTomlComment(line));
+    if (trimmed.empty()) {
+      continue;
+    }
+    if (trimmed == "[[tiles]]") {
+      commitTile();
+      currentLevel = 0;
+      currentLayer = 0;
+      currentX = 0;
+      currentZ = 0;
+      currentTileName.clear();
+      currentAtlasName.clear();
+      hasCurrentTile = true;
+      continue;
+    }
+
+    const std::size_t equalsPosition = trimmed.find('=');
+    if (!hasCurrentTile || equalsPosition == std::string::npos) {
+      continue;
+    }
+
+    const std::string key = trimWhitespace(trimmed.substr(0, equalsPosition));
+    const std::string value =
+        trimWhitespace(trimmed.substr(equalsPosition + 1));
+    if (key == "level") {
+      currentLevel = std::stoi(value);
+    } else if (key == "layer") {
+      currentLayer = std::stoi(value);
+    } else if (key == "x") {
+      currentX = std::stoi(value);
+    } else if (key == "z") {
+      currentZ = std::stoi(value);
+    } else if (key == "name") {
+      currentTileName = parseTomlStringValue(value);
+    } else if (key == "atlas") {
+      currentAtlasName = parseTomlStringValue(value);
+    }
+  }
+
+  commitTile();
+  std::sort(tileSet.mapTiles.begin(), tileSet.mapTiles.end(),
+            [](const PlacedTile &left, const PlacedTile &right) {
+              if (left.level != right.level) {
+                return left.level < right.level;
+              }
+              if (left.layer != right.layer) {
+                return left.layer < right.layer;
+              }
+              const float leftDepth = left.position.x + left.position.z;
+              const float rightDepth = right.position.x + right.position.z;
+              return leftDepth < rightDepth;
+            });
+  std::cout << "Loaded " << tileSet.mapTiles.size()
+            << " saved map tile(s) from " << mapPath << ".\n";
 }
 
 TileSet loadTileSet(const std::filesystem::path &directory) {
@@ -1280,12 +1403,14 @@ TileSet loadTileSet(const std::filesystem::path &directory) {
                              tileSet.collisionDefinitions);
 
   buildGroundTilePlacements(tileSet);
+  loadSavedMapTiles(DefaultMapPath, tileSet);
   std::size_t collisionShapeCount = 0;
   for (const auto &entry : tileSet.collisionDefinitions) {
     collisionShapeCount += entry.second.shapes.size();
   }
   std::cout << "Loaded " << tileSet.tiles.size() << " tile definition(s) from "
-            << tileSet.atlases.size() << " atlas texture(s), plus "
+            << tileSet.atlases.size() << " atlas texture(s), "
+            << tileSet.mapTiles.size() << " saved map tile(s), plus "
             << collisionShapeCount << " collision shape(s).\n";
   return tileSet;
 }
@@ -1487,8 +1612,40 @@ bool hasGroundTileAtPosition(const TileSet &tileSet,
 
 bool hasWalkableTileAtLevel(const TileSet &tileSet, int level,
                             const glm::vec3 &position) {
-  if (level == MinWorldLevel) {
-    return hasGroundTileAtPosition(tileSet, position);
+  if (level == GroundWorldLevel && hasGroundTileAtPosition(tileSet, position)) {
+    return true;
+  }
+
+  const float cellSize = tileSet.groundTileCellSize > 0.0F
+                             ? tileSet.groundTileCellSize
+                             : FallbackGroundTileCellSize;
+  const float halfCellSize = cellSize * 0.5F;
+  for (const PlacedTile &placedTile : tileSet.mapTiles) {
+    if (placedTile.level != level ||
+        placedTile.tileIndex >= tileSet.tiles.size()) {
+      continue;
+    }
+
+    const TileDefinition &tile = tileSet.tiles[placedTile.tileIndex];
+    const auto collisionIterator = tileSet.collisionDefinitions.find(tile.name);
+    if (collisionIterator == tileSet.collisionDefinitions.end()) {
+      continue;
+    }
+
+    const bool isFloorTile =
+        std::any_of(collisionIterator->second.shapes.begin(),
+                    collisionIterator->second.shapes.end(),
+                    [](const CollisionShape &shape) {
+                      return shape.type == CollisionShapeType::Floor;
+                    });
+    if (!isFloorTile) {
+      continue;
+    }
+
+    if (std::abs(position.x - placedTile.position.x) <= halfCellSize &&
+        std::abs(position.z - placedTile.position.z) <= halfCellSize) {
+      return true;
+    }
   }
 
   return false;
@@ -2306,13 +2463,18 @@ void drawTileSet(const TileSet &tileSet, const Camera &camera) {
 
   glDepthMask(GL_FALSE);
 
-  for (const PlacedTile &placedTile : tileSet.groundTiles) {
-    if (placedTile.tileIndex >= tileSet.tiles.size()) {
-      continue;
+  auto drawPlacedTiles = [&](const std::vector<PlacedTile> &placedTiles) {
+    for (const PlacedTile &placedTile : placedTiles) {
+      if (placedTile.tileIndex >= tileSet.tiles.size()) {
+        continue;
+      }
+      drawTileSprite(tileSet, tileSet.tiles[placedTile.tileIndex],
+                     placedTile.position, camera);
     }
-    drawTileSprite(tileSet, tileSet.tiles[placedTile.tileIndex],
-                   placedTile.position, camera);
-  }
+  };
+
+  drawPlacedTiles(tileSet.groundTiles);
+  drawPlacedTiles(tileSet.mapTiles);
 
   glDepthMask(GL_TRUE);
   glBindTexture(GL_TEXTURE_2D, 0);
@@ -2441,7 +2603,7 @@ void renderScene(const Camera &camera, const Character &character,
 
   drawTileSet(tileSet, camera);
   drawGroundGrid(tileSet, GroundTileLayerY, false);
-  if (character.level > MinWorldLevel) {
+  if (character.level != GroundWorldLevel) {
     drawGroundGrid(
         tileSet, static_cast<float>(character.level) * WorldLevelHeight, true);
   }

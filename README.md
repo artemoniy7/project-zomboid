@@ -49,7 +49,7 @@ python3 tools/map_editor.py media/texturepacks/Tiles1x
 python3 tools/map_editor.py media/texturepacks/Tiles1x/Tiles_Test.png --map saves/map_01.toml
 ```
 
-The editor uses the same tile browser pattern as the collision editor: open a texture-pack folder or one PNG atlas from `media/texturepacks`, filter/select tiles from the atlas list, then left-click cells to place tiles and right-click to erase them. Use the **Level** control to edit world levels from `-10` to `10`; **Save map** / **Save map as** writes TOML maps into the `saves/` folder.
+The editor uses the same tile browser pattern as the collision editor: open a texture-pack folder or one PNG atlas from `media/texturepacks`, filter/select tiles from the atlas list, then left-click cells to place tiles and right-click to erase them. Use the **Level** control to edit world levels from `-10` to `10` and the **Layer** control to stack multiple tiles on the same cell. Tile sprites are cached after first use so repeated painting does not constantly crop atlas images. **Save map** / **Save map as** writes TOML maps into the `saves/` folder; the engine loads `saves/map_01.toml` at startup when it exists.
 
 ## Collision editor
 
@@ -60,7 +60,7 @@ python3 tools/collision_editor.py media/texturepacks/Tiles1x
 python3 tools/collision_editor.py media/texturepacks/Tiles1x/Tiles_Test.png
 ```
 
-Use **Open folder** to load every atlas in a texture-pack directory, or **Open PNG atlas** to pick one `.png` file directly. The editor reads the matching atlas `.toml`, including multi-line `pos`/`size` arrays, cuts the atlas into individual tile sprites, automatically selects the first loaded tile, lets you switch with **Prev tile** / **Next tile**, and draws the selected sprite over a projected in-game-style cell guide anchored to the bottom of the sprite so tall/multi-story tiles get their floor collision at ground level. Draw rectangle, circle, or side/wall line collision shapes over the tile, or add a full-tile collision; full-tile collision now defaults to that bottom floor cell instead of the whole tall sprite. **Save collisions.toml** writes normalized collision data next to the tile metadata. The engine loads `collisions.toml` from the same texture-pack directory at startup and reports how many collision shapes were found; movement resolution can then consume those definitions when the collision world is wired in.
+Use **Open folder** to load every atlas in a texture-pack directory, or **Open PNG atlas** to pick one `.png` file directly. The editor reads the matching atlas `.toml`, including multi-line `pos`/`size` arrays, cuts the atlas into individual tile sprites, automatically selects the first loaded tile, lets you switch with **Prev tile** / **Next tile**, and draws the selected sprite over a projected in-game-style cell guide anchored to the bottom of the sprite so tall/multi-story tiles get their floor collision at ground level. Draw rectangle, circle, or side/wall line collision shapes over the tile, add a full-tile collision, or add **Floor / walkable** collision to mark tiles that should support characters as floors instead of blocking objects. Full-tile and floor collision default to that bottom floor cell instead of the whole tall sprite. **Save collisions.toml** writes normalized collision data next to the tile metadata. The engine loads `collisions.toml` from the same texture-pack directory at startup and uses `floor` shapes from saved map tiles as walkable support for multi-level movement/falling.
 
 ## Build
 
