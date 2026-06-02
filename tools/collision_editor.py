@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Small Tkinter editor for Project Zomboid-style tile collision metadata.
+"""Tile collision metadata editor for the C++ Project Zomboid prototype.
 
-Open a Tiles1x-like folder containing atlas PNG files and matching TOML files,
-select a tile, draw simple collision shapes over it, then save collisions.toml.
-The generated file is intentionally simple so the C++ prototype can load it.
+The editor opens either a Tiles1x-style folder or one atlas PNG. It reads the
+matching TOML metadata, cuts the atlas into individual tile sprites, displays the
+selected tile with an in-game-like projected cell guide, and writes normalized
+collision shapes to collisions.toml next to the atlas metadata.
 """
 
 from __future__ import annotations
@@ -17,7 +18,9 @@ from tkinter import filedialog, messagebox, ttk
 
 ZOOM = 4
 GRID_STEPS = 4
+CANVAS_PADDING = 48
 COLLISION_FILE_NAME = "collisions.toml"
+PNG_FILETYPES = (("PNG atlas", ("*.png", "*.PNG")), ("All files", "*.*"))
 
 
 @dataclass
@@ -42,6 +45,7 @@ class CollisionShape:
 @dataclass
 class EditorState:
     folder: Path | None = None
+    atlas_filter: Path | None = None
     tiles: list[TileDef] = field(default_factory=list)
     collisions: dict[str, list[CollisionShape]] = field(default_factory=dict)
 
@@ -85,11 +89,31 @@ def _parse_string(value: str) -> str:
     return value
 
 
-def load_tile_metadata(folder: Path) -> list[TileDef]:
+def atlas_png_files(folder: Path) -> list[Path]:
+    if not folder.exists():
+        return []
+    return sorted(
+        path for path in folder.iterdir()
+        if path.is_file() and path.suffix.lower() == ".png"
+    )
+
+
+def matching_toml_path(atlas_path: Path) -> Path | None:
+    expected = atlas_path.with_suffix(".toml")
+    if expected.exists():
+        return expected
+    for candidate in atlas_path.parent.iterdir():
+        if candidate.stem == atlas_path.stem and candidate.suffix.lower() == ".toml":
+            return candidate
+    return None
+
+
+def load_tile_metadata(folder: Path, atlas_filter: Path | None = None) -> list[TileDef]:
     tiles: list[TileDef] = []
-    for atlas_path in sorted(folder.glob("*.png")):
-        metadata_path = atlas_path.with_suffix(".toml")
-        if not metadata_path.exists() or metadata_path.name == COLLISION_FILE_NAME:
+    atlas_paths = [atlas_filter] if atlas_filter is not None else atlas_png_files(folder)
+    for atlas_path in atlas_paths:
+        metadata_path = matching_toml_path(atlas_path)
+        if metadata_path is None or metadata_path.name == COLLISION_FILE_NAME:
             continue
 
         current_name: str | None = None
@@ -207,27 +231,31 @@ def save_collisions(path: Path, collisions: dict[str, list[CollisionShape]]) -> 
                 lines.append(f"max = {_toml_vec2(shape.max or (1.0, 1.0))}")
             elif shape.type == "circle":
                 lines.append(f"center = {_toml_vec2(shape.center or (0.5, 0.5))}")
-                lines.append(f"radius = {(shape.radius if shape.radius is not None else 0.25):.4f}")
+                radius = shape.radius if shape.radius is not None else 0.25
+                lines.append(f"radius = {radius:.4f}")
         lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
 class CollisionEditor(tk.Tk):
-    def __init__(self, initial_folder: Path | None) -> None:
+    def __init__(self, initial_path: Path | None) -> None:
         super().__init__()
         self.title("Project Zomboid Collision Editor")
-        self.geometry("1100x760")
+        self.geometry("1180x820")
         self.state_data = EditorState()
         self.current_tile: TileDef | None = None
+        self.current_atlas_path: Path | None = None
         self.current_atlas: tk.PhotoImage | None = None
+        self.current_tile_image: tk.PhotoImage | None = None
         self.drag_start: tuple[int, int] | None = None
         self.shape_type = tk.StringVar(value="aabb")
-        self.status = tk.StringVar(value="Open a Tiles1x folder to begin.")
+        self.status = tk.StringVar(value="Open a folder or one PNG atlas to begin.")
         self.tile_filter = tk.StringVar()
+        self.selected_atlas = tk.StringVar(value="All atlases")
         self.tile_filter.trace_add("write", lambda *_: self.refresh_tile_list())
         self._build_ui()
-        if initial_folder is not None:
-            self.open_folder(initial_folder)
+        if initial_path is not None:
+            self.open_path(initial_path)
 
     def _build_ui(self) -> None:
         root = ttk.Frame(self)
@@ -235,20 +263,42 @@ class CollisionEditor(tk.Tk):
 
         toolbar = ttk.Frame(root)
         toolbar.pack(fill=tk.X)
-        ttk.Button(toolbar, text="Open folder", command=self.choose_folder).pack(side=tk.LEFT)
-        ttk.Button(toolbar, text="Save collisions.toml", command=self.save).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(toolbar, text="Open folder", command=self.choose_folder).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(toolbar, text="Open PNG atlas", command=self.choose_png).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Button(toolbar, text="Save collisions.toml", command=self.save).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Button(toolbar, text="Prev tile", command=self.select_previous_tile).pack(
+            side=tk.LEFT, padx=(18, 0)
+        )
+        ttk.Button(toolbar, text="Next tile", command=self.select_next_tile).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
         ttk.Label(toolbar, textvariable=self.status).pack(side=tk.LEFT, padx=16)
 
         body = ttk.Frame(root)
         body.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
-        left = ttk.Frame(body, width=300)
+        left = ttk.Frame(body, width=330)
         left.pack(side=tk.LEFT, fill=tk.Y)
-        ttk.Label(left, text="Tile filter").pack(anchor=tk.W)
+        ttk.Label(left, text="Atlas").pack(anchor=tk.W)
+        self.atlas_combo = ttk.Combobox(
+            left, textvariable=self.selected_atlas, state="readonly"
+        )
+        self.atlas_combo.pack(fill=tk.X)
+        self.atlas_combo.bind("<<ComboboxSelected>>", self.on_atlas_selected)
+        ttk.Label(left, text="Tile filter").pack(anchor=tk.W, pady=(8, 0))
         ttk.Entry(left, textvariable=self.tile_filter).pack(fill=tk.X)
-        self.tile_list = tk.Listbox(left, width=42)
+        self.tile_list = tk.Listbox(left, width=46)
         self.tile_list.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         self.tile_list.bind("<<ListboxSelect>>", self.on_tile_selected)
+        self.tile_list.bind(
+            "<Double-Button-1>", lambda _event: self.redraw_canvas()
+        )
 
         center = ttk.Frame(body)
         center.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8)
@@ -258,54 +308,150 @@ class CollisionEditor(tk.Tk):
         self.canvas.bind("<B1-Motion>", self.on_drag_preview)
         self.canvas.bind("<ButtonRelease-1>", self.on_drag_end)
 
-        right = ttk.Frame(body, width=280)
+        right = ttk.Frame(body, width=290)
         right.pack(side=tk.RIGHT, fill=tk.Y)
         ttk.Label(right, text="Shape type").pack(anchor=tk.W)
-        for label, value in (("Rectangle / AABB", "aabb"), ("Circle", "circle"), ("Full tile", "full_tile")):
-            ttk.Radiobutton(right, text=label, variable=self.shape_type, value=value).pack(anchor=tk.W)
-        ttk.Button(right, text="Add full-tile collision", command=self.add_full_tile).pack(fill=tk.X, pady=(8, 0))
-        ttk.Button(right, text="Delete selected shape", command=self.delete_selected_shape).pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(right, text="Shapes for selected tile").pack(anchor=tk.W, pady=(16, 0))
-        self.shape_list = tk.Listbox(right, width=36, height=18)
+        for label, value in (
+            ("Rectangle / AABB", "aabb"),
+            ("Circle", "circle"),
+            ("Full tile", "full_tile"),
+        ):
+            ttk.Radiobutton(
+                right, text=label, variable=self.shape_type, value=value
+            ).pack(anchor=tk.W)
+        ttk.Button(
+            right, text="Add full-tile collision", command=self.add_full_tile
+        ).pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(
+            right, text="Delete selected shape", command=self.delete_selected_shape
+        ).pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(right, text="Shapes for selected tile").pack(
+            anchor=tk.W, pady=(16, 0)
+        )
+        self.shape_list = tk.Listbox(right, width=38, height=18)
         self.shape_list.pack(fill=tk.BOTH, expand=True)
-        self.shape_list.bind("<<ListboxSelect>>", lambda _event: self.redraw_canvas())
+        self.shape_list.bind(
+            "<<ListboxSelect>>", lambda _event: self.redraw_canvas()
+        )
 
     def choose_folder(self) -> None:
         selected = filedialog.askdirectory(title="Choose Tiles1x folder")
         if selected:
-            self.open_folder(Path(selected))
+            self.open_path(Path(selected))
 
-    def open_folder(self, folder: Path) -> None:
+    def choose_png(self) -> None:
+        selected = filedialog.askopenfilename(
+            title="Choose one PNG atlas", filetypes=PNG_FILETYPES
+        )
+        if selected:
+            self.open_path(Path(selected))
+
+    def open_path(self, path: Path) -> None:
+        if path.is_file():
+            if path.suffix.lower() != ".png":
+                messagebox.showerror("Unsupported file", "Please select a .png atlas.")
+                return
+            self.open_folder(path.parent, atlas_filter=path)
+        else:
+            self.open_folder(path, atlas_filter=None)
+
+    def open_folder(self, folder: Path, atlas_filter: Path | None) -> None:
         try:
-            tiles = load_tile_metadata(folder)
+            tiles = load_tile_metadata(folder, atlas_filter)
         except Exception as exc:  # noqa: BLE001 - UI should show parser errors.
             messagebox.showerror("Could not load tiles", str(exc))
             return
         self.state_data.folder = folder
+        self.state_data.atlas_filter = atlas_filter
         self.state_data.tiles = tiles
         self.state_data.collisions = load_collisions(folder / COLLISION_FILE_NAME)
         self.current_tile = None
-        self.status.set(f"Loaded {len(tiles)} tile(s) from {folder}")
+        self.current_atlas = None
+        self.current_atlas_path = None
+        self.current_tile_image = None
+        self.refresh_atlas_combo()
         self.refresh_tile_list()
+        mode = atlas_filter.name if atlas_filter is not None else "all atlases"
+        self.status.set(f"Loaded {len(tiles)} tile(s) from {mode} in {folder}")
         self.redraw_canvas()
+
+    def refresh_atlas_combo(self) -> None:
+        atlas_names = ["All atlases"]
+        atlas_names.extend(
+            sorted({tile.atlas_path.name for tile in self.state_data.tiles})
+        )
+        self.atlas_combo["values"] = atlas_names
+        if self.state_data.atlas_filter is not None:
+            self.selected_atlas.set(self.state_data.atlas_filter.name)
+        else:
+            self.selected_atlas.set("All atlases")
+
+    def on_atlas_selected(self, _event: tk.Event) -> None:
+        self.refresh_tile_list()
+
+    def tile_visible_in_filters(self, tile: TileDef) -> bool:
+        query = self.tile_filter.get().lower()
+        atlas_name = self.selected_atlas.get()
+        if atlas_name != "All atlases" and tile.atlas_path.name != atlas_name:
+            return False
+        return not query or query in tile.name.lower()
+
+    def filtered_tiles(self) -> list[TileDef]:
+        return [
+            tile
+            for tile in self.state_data.tiles
+            if self.tile_visible_in_filters(tile)
+        ]
 
     def refresh_tile_list(self) -> None:
         self.tile_list.delete(0, tk.END)
-        query = self.tile_filter.get().lower()
-        for tile in self.state_data.tiles:
-            if not query or query in tile.name.lower():
-                self.tile_list.insert(tk.END, tile.name)
+        for tile in self.filtered_tiles():
+            self.tile_list.insert(tk.END, f"{tile.name}  [{tile.atlas_path.name}]")
 
-    def selected_tile_name(self) -> str | None:
+    def selected_tile_index(self) -> int | None:
         selection = self.tile_list.curselection()
         if not selection:
             return None
-        return self.tile_list.get(selection[0])
+        return selection[0]
+
+    def select_tile_by_index(self, index: int) -> None:
+        tiles = self.filtered_tiles()
+        if not tiles:
+            return
+        index = max(0, min(len(tiles) - 1, index))
+        self.tile_list.selection_clear(0, tk.END)
+        self.tile_list.selection_set(index)
+        self.tile_list.see(index)
+        self.current_tile = tiles[index]
+        self.current_tile_image = None
+        self.refresh_shape_list()
+        self.redraw_canvas()
+
+    def select_next_tile(self) -> None:
+        tiles = self.filtered_tiles()
+        if not tiles:
+            return
+        index = self.selected_tile_index()
+        self.select_tile_by_index(
+            0 if index is None else (index + 1) % len(tiles)
+        )
+
+    def select_previous_tile(self) -> None:
+        tiles = self.filtered_tiles()
+        if not tiles:
+            return
+        index = self.selected_tile_index()
+        self.select_tile_by_index(
+            len(tiles) - 1 if index is None else (index - 1) % len(tiles)
+        )
 
     def on_tile_selected(self, _event: tk.Event) -> None:
-        name = self.selected_tile_name()
-        self.current_tile = next((tile for tile in self.state_data.tiles if tile.name == name), None)
-        self.current_atlas = None
+        index = self.selected_tile_index()
+        tiles = self.filtered_tiles()
+        self.current_tile = (
+            tiles[index] if index is not None and index < len(tiles) else None
+        )
+        self.current_tile_image = None
         self.refresh_shape_list()
         self.redraw_canvas()
 
@@ -313,7 +459,8 @@ class CollisionEditor(tk.Tk):
         self.shape_list.delete(0, tk.END)
         if self.current_tile is None:
             return
-        for index, shape in enumerate(self.state_data.collisions.get(self.current_tile.name, []), start=1):
+        shapes = self.state_data.collisions.get(self.current_tile.name, [])
+        for index, shape in enumerate(shapes, start=1):
             if shape.type == "circle":
                 self.shape_list.insert(
                     tk.END,
@@ -324,10 +471,30 @@ class CollisionEditor(tk.Tk):
                     tk.END, f"{index}. {shape.type} min={shape.min} max={shape.max}"
                 )
 
-    def canvas_size(self) -> tuple[int, int]:
+    def sprite_size(self) -> tuple[int, int]:
         if self.current_tile is None:
             return 1, 1
         return self.current_tile.size[0] * ZOOM, self.current_tile.size[1] * ZOOM
+
+    def sprite_origin(self) -> tuple[int, int]:
+        return CANVAS_PADDING, CANVAS_PADDING
+
+    def ensure_atlas_image(self, tile: TileDef) -> tk.PhotoImage:
+        if self.current_atlas is None or self.current_atlas_path != tile.atlas_path:
+            self.current_atlas = tk.PhotoImage(file=str(tile.atlas_path))
+            self.current_atlas_path = tile.atlas_path
+            self.current_tile_image = None
+        return self.current_atlas
+
+    def tile_sprite_image(self, tile: TileDef) -> tk.PhotoImage:
+        if self.current_tile_image is not None:
+            return self.current_tile_image
+        atlas = self.ensure_atlas_image(tile)
+        x, y = tile.pos
+        width, height = tile.size
+        cropped = atlas.copy(from_coords=(x, y, x + width, y + height))
+        self.current_tile_image = cropped.zoom(ZOOM, ZOOM)
+        return self.current_tile_image
 
     def redraw_canvas(
         self, preview: tuple[int, int, int, int] | None = None
@@ -335,25 +502,39 @@ class CollisionEditor(tk.Tk):
         self.canvas.delete("all")
         if self.current_tile is None:
             self.canvas.create_text(
-                20, 20, anchor=tk.NW, fill="white", text="Select a tile."
+                20,
+                20,
+                anchor=tk.NW,
+                fill="white",
+                text="Select a tile or open one PNG atlas.",
             )
             return
+
         tile = self.current_tile
-        width, height = self.canvas_size()
-        self.canvas.config(scrollregion=(0, 0, width, height))
-        if self.current_atlas is None:
-            self.current_atlas = tk.PhotoImage(file=str(tile.atlas_path))
-        zoomed = self.current_atlas.zoom(ZOOM, ZOOM)
-        self.canvas._zoomed_atlas = zoomed  # keep Tk image alive
-        self.canvas.create_image(
-            -tile.pos[0] * ZOOM, -tile.pos[1] * ZOOM, anchor=tk.NW, image=zoomed
+        sprite_width, sprite_height = self.sprite_size()
+        origin_x, origin_y = self.sprite_origin()
+        canvas_width = sprite_width + CANVAS_PADDING * 2
+        canvas_height = sprite_height + CANVAS_PADDING * 2
+        self.canvas.config(scrollregion=(0, 0, canvas_width, canvas_height))
+        self.draw_projected_cell_guide(
+            origin_x, origin_y, sprite_width, sprite_height
         )
-        self.canvas.create_rectangle(0, 0, width, height, outline="#d0d0d0")
-        for step in range(1, GRID_STEPS):
-            x = width * step / GRID_STEPS
-            y = height * step / GRID_STEPS
-            self.canvas.create_line(x, 0, x, height, fill="#555555")
-            self.canvas.create_line(0, y, width, y, fill="#555555")
+        self.canvas.create_image(
+            origin_x, origin_y, anchor=tk.NW, image=self.tile_sprite_image(tile)
+        )
+        self.canvas.create_rectangle(
+            origin_x, origin_y, origin_x + sprite_width, origin_y + sprite_height,
+            outline="#d0d0d0",
+        )
+        self.draw_sprite_grid(origin_x, origin_y, sprite_width, sprite_height)
+        self.canvas.create_text(
+            origin_x,
+            16,
+            anchor=tk.NW,
+            fill="#dddddd",
+            text=f"{tile.name}  ({tile.atlas_path.name})",
+        )
+
         selected = self.shape_list.curselection()
         selected_index = selected[0] if selected else -1
         for index, shape in enumerate(
@@ -366,48 +547,115 @@ class CollisionEditor(tk.Tk):
                 *preview, outline="#ffd000", width=2, dash=(4, 3)
             )
 
+    def draw_projected_cell_guide(
+        self, origin_x: int, origin_y: int, sprite_width: int, sprite_height: int
+    ) -> None:
+        center_x = origin_x + sprite_width * 0.5
+        center_y = origin_y + sprite_height * 0.5
+        diamond_width = sprite_width
+        diamond_height = sprite_width * 0.5
+        points = [
+            center_x, center_y - diamond_height * 0.5,
+            center_x + diamond_width * 0.5, center_y,
+            center_x, center_y + diamond_height * 0.5,
+            center_x - diamond_width * 0.5, center_y,
+        ]
+        self.canvas.create_polygon(points, outline="#4f8cff", fill="", width=2)
+        for step in range(1, GRID_STEPS):
+            t = step / GRID_STEPS
+            left_x = center_x - diamond_width * 0.5 * (1.0 - t)
+            left_y = center_y - diamond_height * 0.5 * t
+            right_x = center_x + diamond_width * 0.5 * t
+            right_y = center_y - diamond_height * 0.5 * (1.0 - t)
+            self.canvas.create_line(
+                left_x, left_y, right_x, right_y, fill="#315070"
+            )
+            left_x = center_x - diamond_width * 0.5 * t
+            left_y = center_y + diamond_height * 0.5 * (1.0 - t)
+            right_x = center_x + diamond_width * 0.5 * (1.0 - t)
+            right_y = center_y + diamond_height * 0.5 * t
+            self.canvas.create_line(
+                left_x, left_y, right_x, right_y, fill="#315070"
+            )
+
+    def draw_sprite_grid(
+        self, origin_x: int, origin_y: int, sprite_width: int, sprite_height: int
+    ) -> None:
+        for step in range(1, GRID_STEPS):
+            x = origin_x + sprite_width * step / GRID_STEPS
+            y = origin_y + sprite_height * step / GRID_STEPS
+            self.canvas.create_line(
+                x, origin_y, x, origin_y + sprite_height, fill="#555555"
+            )
+            self.canvas.create_line(
+                origin_x, y, origin_x + sprite_width, y, fill="#555555"
+            )
+
     def draw_shape(self, shape: CollisionShape, color: str) -> None:
-        width, height = self.canvas_size()
+        sprite_width, sprite_height = self.sprite_size()
+        origin_x, origin_y = self.sprite_origin()
         if shape.type in {"aabb", "full_tile"} and shape.min and shape.max:
-            x0, y0 = shape.min[0] * width, shape.min[1] * height
-            x1, y1 = shape.max[0] * width, shape.max[1] * height
+            x0 = origin_x + shape.min[0] * sprite_width
+            y0 = origin_y + shape.min[1] * sprite_height
+            x1 = origin_x + shape.max[0] * sprite_width
+            y1 = origin_y + shape.max[1] * sprite_height
             self.canvas.create_rectangle(x0, y0, x1, y1, outline=color, width=2)
         elif shape.type == "circle" and shape.center and shape.radius is not None:
-            cx, cy = shape.center[0] * width, shape.center[1] * height
-            radius = shape.radius * min(width, height)
+            cx = origin_x + shape.center[0] * sprite_width
+            cy = origin_y + shape.center[1] * sprite_height
+            radius = shape.radius * min(sprite_width, sprite_height)
             self.canvas.create_oval(
                 cx - radius, cy - radius, cx + radius, cy + radius,
-                outline=color, width=2
+                outline=color, width=2,
             )
+
+    def clamp_to_sprite(self, x: int, y: int) -> tuple[int, int]:
+        origin_x, origin_y = self.sprite_origin()
+        sprite_width, sprite_height = self.sprite_size()
+        return (
+            max(origin_x, min(origin_x + sprite_width, x)),
+            max(origin_y, min(origin_y + sprite_height, y)),
+        )
 
     def normalized_rect(
         self, coords: tuple[int, int, int, int]
     ) -> tuple[tuple[float, float], tuple[float, float]]:
-        width, height = self.canvas_size()
-        x0, y0, x1, y1 = coords
-        min_x, max_x = sorted((max(0, min(width, x0)), max(0, min(width, x1))))
-        min_y, max_y = sorted((max(0, min(height, y0)), max(0, min(height, y1))))
-        return (min_x / width, min_y / height), (max_x / width, max_y / height)
+        origin_x, origin_y = self.sprite_origin()
+        sprite_width, sprite_height = self.sprite_size()
+        x0, y0 = self.clamp_to_sprite(coords[0], coords[1])
+        x1, y1 = self.clamp_to_sprite(coords[2], coords[3])
+        min_x, max_x = sorted((x0, x1))
+        min_y, max_y = sorted((y0, y1))
+        return (
+            (
+                (min_x - origin_x) / sprite_width,
+                (min_y - origin_y) / sprite_height,
+            ),
+            (
+                (max_x - origin_x) / sprite_width,
+                (max_y - origin_y) / sprite_height,
+            ),
+        )
 
     def on_drag_start(self, event: tk.Event) -> None:
         if self.current_tile is None:
             return
-        self.drag_start = (event.x, event.y)
+        self.drag_start = self.clamp_to_sprite(event.x, event.y)
 
     def on_drag_preview(self, event: tk.Event) -> None:
         if self.drag_start is None:
             return
         x0, y0 = self.drag_start
-        self.redraw_canvas((x0, y0, event.x, event.y))
+        x1, y1 = self.clamp_to_sprite(event.x, event.y)
+        self.redraw_canvas((x0, y0, x1, y1))
 
     def on_drag_end(self, event: tk.Event) -> None:
         if self.current_tile is None or self.drag_start is None:
             return
         x0, y0 = self.drag_start
+        x1, y1 = self.clamp_to_sprite(event.x, event.y)
         self.drag_start = None
-        min_point, max_point = self.normalized_rect(
-            (x0, y0, event.x, event.y)
-        )
+        min_point, max_point = self.normalized_rect((x0, y0, x1, y1))
         if (
             abs(max_point[0] - min_point[0]) < 0.01
             or abs(max_point[1] - min_point[1]) < 0.01
@@ -441,9 +689,7 @@ class CollisionEditor(tk.Tk):
         if self.current_tile is None:
             return
         self.state_data.collisions.setdefault(self.current_tile.name, []).append(
-            CollisionShape(
-                type="full_tile", min=(0.0, 0.0), max=(1.0, 1.0)
-            )
+            CollisionShape(type="full_tile", min=(0.0, 0.0), max=(1.0, 1.0))
         )
         self.refresh_shape_list()
         self.redraw_canvas()
@@ -470,11 +716,11 @@ class CollisionEditor(tk.Tk):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Edit tile collision metadata.")
     parser.add_argument(
-        "folder", nargs="?", type=Path,
-        help="Tiles folder with PNG/TOML atlas metadata"
+        "path", nargs="?", type=Path,
+        help="Tiles folder or one PNG atlas with matching TOML metadata",
     )
     args = parser.parse_args()
-    app = CollisionEditor(args.folder)
+    app = CollisionEditor(args.path)
     app.mainloop()
     return 0
 
