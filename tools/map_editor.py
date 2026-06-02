@@ -591,6 +591,19 @@ class MapEditor(tk.Tk):
         offset_x, offset_z = self.placement_cell_offset()
         return self.cell_to_screen(x + offset_x, z + offset_z)
 
+    def projected_cell_center_y(self, tile: TileDef) -> float:
+        diamond_height = tile.size[0] * 0.5
+        return max(diamond_height * 0.5, tile.size[1] - diamond_height * 0.5)
+
+    def placement_sprite_to_screen(
+        self, x: int, z: int, tile: TileDef
+    ) -> tuple[float, float]:
+        cx, cy = self.placement_to_screen(x, z)
+        collision_cell_offset_y = (
+            self.projected_cell_center_y(tile) - tile.size[1] * 0.5
+        )
+        return cx, cy - collision_cell_offset_y
+
     def screen_to_cell(self, screen_x: float, screen_y: float) -> tuple[int, int]:
         origin_x, origin_y = self.map_origin()
         dx = (screen_x - origin_x) / (TILE_SCREEN_WIDTH * 0.5)
@@ -659,6 +672,12 @@ class MapEditor(tk.Tk):
         cx, cy = self.cell_to_screen(x, z)
         self.draw_cell_outline_at(cx, cy, color, width)
 
+    def draw_placement_cell_outline(
+        self, x: int, z: int, color: str, width: int = 1
+    ) -> None:
+        cx, cy = self.placement_to_screen(x, z)
+        self.draw_cell_outline_at(cx, cy, color, width)
+
     def draw_cell_outline_at(
         self, cx: float, cy: float, color: str, width: int = 1
     ) -> None:
@@ -677,9 +696,9 @@ class MapEditor(tk.Tk):
     def draw_placement(self, layer: int, x: int, z: int, saved_tile: MapTile) -> None:
         outline = "#ffd000" if layer == self.current_layer() else "#4f8cff"
         cx, cy = self.placement_to_screen(x, z)
-        self.draw_cell_outline_at(cx, cy, outline, width=2)
         tile = self.tile_by_saved_ref(saved_tile)
         if tile is None:
+            self.draw_placement_cell_outline(x, z, outline, width=2)
             self.map_canvas.create_text(
                 cx,
                 cy,
@@ -690,7 +709,9 @@ class MapEditor(tk.Tk):
             return
         image = self.tile_sprite_image(tile)
         self.placement_images.append(image)
-        self.map_canvas.create_image(cx, cy, anchor=tk.CENTER, image=image)
+        sprite_x, sprite_y = self.placement_sprite_to_screen(x, z, tile)
+        self.map_canvas.create_image(sprite_x, sprite_y, anchor=tk.CENTER, image=image)
+        self.draw_placement_cell_outline(x, z, outline, width=2)
 
     def on_map_motion(self, event: tk.Event) -> None:
         x, z = self.screen_to_cell(event.x, event.y)
@@ -743,7 +764,7 @@ class MapEditor(tk.Tk):
         if key is None:
             return
         _level, _layer, x, z = key
-        self.draw_cell_outline(x, z, "#ffd000", width=3)
+        self.draw_placement_cell_outline(x, z, "#ffd000", width=3)
 
     def delete_selected_placement(self) -> None:
         key = self.selected_placement_key()
