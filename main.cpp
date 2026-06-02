@@ -1395,6 +1395,116 @@ void loadSavedMapTiles(const std::filesystem::path &mapPath, TileSet &tileSet) {
             << " saved map tile(s) from " << mapPath << ".\n";
 }
 
+bool placedTileDrawOrderLess(const PlacedTile &left, const PlacedTile &right) {
+  if (left.level != right.level) {
+    return left.level < right.level;
+  }
+  if (left.layer != right.layer) {
+    return left.layer < right.layer;
+  }
+  const float leftDepth = left.position.x + left.position.z;
+  const float rightDepth = right.position.x + right.position.z;
+  if (leftDepth != rightDepth) {
+    return leftDepth < rightDepth;
+  }
+  if (left.position.z != right.position.z) {
+    return left.position.z < right.position.z;
+  }
+  return left.tileIndex < right.tileIndex;
+}
+
+struct SavedMapTileParseState {
+  int level = 0;
+  int layer = 0;
+  int x = 0;
+  int z = 0;
+  std::string tileName;
+  std::string atlasName;
+  bool hasTile = false;
+};
+
+void resetSavedMapTileParseState(SavedMapTileParseState &state) {
+  state.level = 0;
+  state.layer = 0;
+  state.x = 0;
+  state.z = 0;
+  state.tileName.clear();
+  state.atlasName.clear();
+  state.hasTile = true;
+}
+
+void appendSavedMapTile(const SavedMapTileParseState &state, TileSet &tileSet) {
+  if (!state.hasTile || state.tileName.empty()) {
+    return;
+  }
+
+  const std::size_t tileIndex =
+      findTileIndexBySavedReference(tileSet, state.tileName, state.atlasName);
+  if (tileIndex == std::numeric_limits<std::size_t>::max()) {
+    std::cerr << "Saved map tile '" << state.tileName
+              << "' was not found in loaded tile metadata.\n";
+    return;
+  }
+
+  tileSet.mapTiles.push_back(
+      PlacedTile{tileIndex,
+                 {static_cast<float>(state.x) * tileSet.groundTileCellSize,
+                  static_cast<float>(state.level) * WorldLevelHeight,
+                  static_cast<float>(state.z) * tileSet.groundTileCellSize},
+                 state.level,
+                 state.layer});
+}
+
+void loadSavedMapTiles(const std::filesystem::path &mapPath, TileSet &tileSet) {
+  tileSet.mapTiles.clear();
+  std::ifstream file(mapPath);
+  if (!file) {
+    return;
+  }
+
+  SavedMapTileParseState currentTile;
+  std::string line;
+  while (std::getline(file, line)) {
+    const std::string trimmed = trimWhitespace(stripTomlComment(line));
+    if (trimmed.empty()) {
+      continue;
+    }
+    if (trimmed == "[[tiles]]") {
+      appendSavedMapTile(currentTile, tileSet);
+      resetSavedMapTileParseState(currentTile);
+      continue;
+    }
+
+    const std::size_t equalsPosition = trimmed.find('=');
+    if (!currentTile.hasTile || equalsPosition == std::string::npos) {
+      continue;
+    }
+
+    const std::string key = trimWhitespace(trimmed.substr(0, equalsPosition));
+    const std::string value =
+        trimWhitespace(trimmed.substr(equalsPosition + 1));
+    if (key == "level") {
+      currentTile.level = std::stoi(value);
+    } else if (key == "layer") {
+      currentTile.layer = std::stoi(value);
+    } else if (key == "x") {
+      currentTile.x = std::stoi(value);
+    } else if (key == "z") {
+      currentTile.z = std::stoi(value);
+    } else if (key == "name") {
+      currentTile.tileName = parseTomlStringValue(value);
+    } else if (key == "atlas") {
+      currentTile.atlasName = parseTomlStringValue(value);
+    }
+  }
+
+  appendSavedMapTile(currentTile, tileSet);
+  std::sort(tileSet.mapTiles.begin(), tileSet.mapTiles.end(),
+            placedTileDrawOrderLess);
+  std::cout << "Loaded " << tileSet.mapTiles.size()
+            << " saved map tile(s) from " << mapPath << ".\n";
+}
+
 TileSet loadTileSet(const std::filesystem::path &directory) {
   TileSet tileSet;
   if (!std::filesystem::exists(directory)) {
