@@ -659,6 +659,12 @@ class MapEditor(tk.Tk):
         cx, cy = self.cell_to_screen(x, z)
         self.draw_cell_outline_at(cx, cy, color, width)
 
+    def draw_placement_cell_outline(
+        self, x: int, z: int, color: str, width: int = 1
+    ) -> None:
+        cx, cy = self.placement_to_screen(x, z)
+        self.draw_cell_outline_at(cx, cy, color, width)
+
     def draw_cell_outline_at(
         self, cx: float, cy: float, color: str, width: int = 1
     ) -> None:
@@ -677,7 +683,7 @@ class MapEditor(tk.Tk):
     def draw_placement(self, layer: int, x: int, z: int, saved_tile: MapTile) -> None:
         outline = "#ffd000" if layer == self.current_layer() else "#4f8cff"
         cx, cy = self.placement_to_screen(x, z)
-        self.draw_cell_outline_at(cx, cy, outline, width=2)
+        self.draw_placement_cell_outline(x, z, outline, width=2)
         tile = self.tile_by_saved_ref(saved_tile)
         if tile is None:
             self.map_canvas.create_text(
@@ -743,7 +749,7 @@ class MapEditor(tk.Tk):
         if key is None:
             return
         _level, _layer, x, z = key
-        self.draw_cell_outline(x, z, "#ffd000", width=3)
+        self.draw_placement_cell_outline(x, z, "#ffd000", width=3)
 
     def delete_selected_placement(self) -> None:
         key = self.selected_placement_key()
