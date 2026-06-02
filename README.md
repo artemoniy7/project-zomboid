@@ -12,7 +12,7 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 - Loads `media/models/Bob.fbx` through Assimp and draws it in the world.
 - Camera follows the character model instead of panning independently.
 - WASD moves the character like Project Zomboid: up/down/left/right on screen across diagonal world-tile directions.
-- Loads `media/anim_x/bob/Bob_Idle.fbx`, `media/animations/Bob_IdleToWalk.fbx`, `media/anim_x/bob/Bob_Walk.fbx`, and `media/animations/Bob_WalkToStop.fbx`, plays start/stop transition clips around walk, and applies skeletal CPU skinning to the body mesh.
+- Loads `media/anim_x/bob/Bob_Idle.fbx`, `media/anim_x/bob/Bob_IdleToWalk.fbx`, `media/anim_x/bob/Bob_Walk.fbx`, `media/anim_x/bob/Bob_WalkToStop.fbx`, `media/anim_x/bob/Bob_FallIdle.fbx`, and turn clips, plays movement/fall states, and applies skeletal CPU skinning to the body mesh.
 - Applies `media/textures/Body MaleBody01.png` to the player model when the PNG and model UVs are available.
 - Falls back to a basic colored cube when the model file is missing.
 
@@ -23,11 +23,33 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 | `W` / `S` | Move up / down on screen across diagonal tiles |
 | `A` / `D` | Move left / right on screen across diagonal tiles |
 | Mouse wheel | Zoom camera in / out |
+| `Page Up` / `Page Down` | Move the character between walkable building levels |
 | `Esc` | Close the window |
+
+
+## Walkable levels and wall height
+
+The engine now treats a **level** as one full wall-storey above the previous floor. In this prototype the wall-storey height is fixed by the tile-art scale: `TileSpriteWorldScale` converts pixels to world units (`1 / 64`), and `WorldLevelHeight` uses a 128-pixel wall frame, so each floor is `2.0` world units above the previous one. That makes level `0` ground, level `1` `2.0` units high, level `2` `4.0` units high, and so on.
+
+This is intentionally derived from sprite dimensions instead of a guessed real-world meter value. If the wall art later uses a different storey frame height, change `LevelHeightInSpritePixels` near the tile constants in `main.cpp`; all walkable levels and the camera follow target will keep using the same formula.
+
+When the character is on a level/tile position that has no walkable tile under it, the engine switches to `Bob_FallIdle.002`, locks movement and turning input, keeps the character facing the direction they were moving, and applies downward fall velocity until a lower supported tile is reached.
 
 ## Tuning movement and animation speed
 
 Movement speed is controlled by `CharacterMoveSpeed` near the top of `main.cpp`. Looping animation playback speed is controlled separately by `CharacterAnimationPlaybackSpeed`, while one-shot start/stop clips use `CharacterTransitionAnimationPlaybackSpeed` so they can stay snappy without speeding up idle/walk loops. When movement keys are released, `CharacterStopCoastSpeedScale` controls the small decelerating forward coast during `Bob_WalkToStop`. Use values below `1.0F` to slow animation down or above `1.0F` to speed it up.
+
+## Map editor
+
+A Python/Tkinter map editor is available for painting tile maps and saving them under `saves/`:
+
+```bash
+python3 tools/map_editor.py
+python3 tools/map_editor.py media/texturepacks/Tiles1x
+python3 tools/map_editor.py media/texturepacks/Tiles1x/Tiles_Test.png --map saves/map_01.toml
+```
+
+The editor uses the same tile browser pattern as the collision editor: open a texture-pack folder or one PNG atlas from `media/texturepacks`, filter/select tiles from the atlas list, then left-click cells to place tiles and right-click to erase them. Use the **Level** control to edit world levels from `-10` to `10` and the **Layer** control to stack multiple tiles on the same cell: layer `0` is treated as floor, while higher layers are props/objects. Tile sprites are cached after first use so repeated painting does not constantly crop atlas images. The editor draws the grid again above layer `0`, keeping it visible under props without covering floor tiles. **Save map** / **Save map as** writes TOML maps into the `saves/` folder; the engine loads `saves/map_01.toml` at startup when it exists.
 
 ## Collision editor
 
@@ -38,7 +60,7 @@ python3 tools/collision_editor.py media/texturepacks/Tiles1x
 python3 tools/collision_editor.py media/texturepacks/Tiles1x/Tiles_Test.png
 ```
 
-Use **Open folder** to load every atlas in a texture-pack directory, or **Open PNG atlas** to pick one `.png` file directly. The editor reads the matching atlas `.toml`, including multi-line `pos`/`size` arrays, cuts the atlas into individual tile sprites, automatically selects the first loaded tile, lets you switch with **Prev tile** / **Next tile**, and draws the selected sprite over a projected in-game-style cell guide anchored to the bottom of the sprite so tall/multi-story tiles get their floor collision at ground level. Draw rectangle, circle, or side/wall line collision shapes over the tile, or add a full-tile collision; full-tile collision now defaults to that bottom floor cell instead of the whole tall sprite. **Save collisions.toml** writes normalized collision data next to the tile metadata. The engine loads `collisions.toml` from the same texture-pack directory at startup and reports how many collision shapes were found; movement resolution can then consume those definitions when the collision world is wired in.
+Use **Open folder** to load every atlas in a texture-pack directory, or **Open PNG atlas** to pick one `.png` file directly. The editor reads the matching atlas `.toml`, including multi-line `pos`/`size` arrays, cuts the atlas into individual tile sprites, automatically selects the first loaded tile, lets you switch with **Prev tile** / **Next tile**, and draws the selected sprite over a projected in-game-style cell guide anchored to the bottom of the sprite so tall/multi-story tiles get their floor collision at ground level. Draw rectangle, circle, or side/wall line collision shapes over the tile, add a full-tile collision, or add **Floor / walkable** collision to mark tiles that should support characters as floors instead of blocking objects. Full-tile and floor collision default to that bottom floor cell instead of the whole tall sprite. **Save collisions.toml** writes normalized collision data next to the tile metadata. The engine loads `collisions.toml` from the same texture-pack directory at startup and uses layer `0` saved map tiles as floor support and uses non-floor collision shapes from higher layers as blocking object collision. `floor` shapes can still mark non-layer-0 tiles as walkable support when needed.
 
 ## Build
 
