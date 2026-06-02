@@ -1495,19 +1495,39 @@ void loadMatrix(GLenum matrixMode, const glm::mat4 &matrix) {
   glLoadMatrixf(glm::value_ptr(matrix));
 }
 
-void drawGroundGrid() {
-  constexpr int GridHalfSize = 20;
+void drawGroundGrid(const TileSet &tileSet) {
+  float minX = static_cast<float>(-GroundTileHalfSize);
+  float maxX = static_cast<float>(GroundTileHalfSize);
+  float minZ = static_cast<float>(-GroundTileHalfSize);
+  float maxZ = static_cast<float>(GroundTileHalfSize);
+
+  if (!tileSet.groundTiles.empty()) {
+    minX = tileSet.groundTiles.front().position.x;
+    maxX = minX;
+    minZ = tileSet.groundTiles.front().position.z;
+    maxZ = minZ;
+    for (const PlacedTile &placedTile : tileSet.groundTiles) {
+      minX = std::min(minX, placedTile.position.x);
+      maxX = std::max(maxX, placedTile.position.x);
+      minZ = std::min(minZ, placedTile.position.z);
+      maxZ = std::max(maxZ, placedTile.position.z);
+    }
+  }
+
+  const float minBoundaryX = minX - 0.5F;
+  const float maxBoundaryX = maxX + 0.5F;
+  const float minBoundaryZ = minZ - 0.5F;
+  const float maxBoundaryZ = maxZ + 0.5F;
+
   glColor3f(0.28F, 0.42F, 0.24F);
   glBegin(GL_LINES);
-  for (int line = -GridHalfSize; line <= GridHalfSize; ++line) {
-    glVertex3f(static_cast<float>(line), 0.0F,
-               static_cast<float>(-GridHalfSize));
-    glVertex3f(static_cast<float>(line), 0.0F,
-               static_cast<float>(GridHalfSize));
-    glVertex3f(static_cast<float>(-GridHalfSize), 0.0F,
-               static_cast<float>(line));
-    glVertex3f(static_cast<float>(GridHalfSize), 0.0F,
-               static_cast<float>(line));
+  for (float x = minBoundaryX; x <= maxBoundaryX + 0.001F; x += 1.0F) {
+    glVertex3f(x, 0.0F, minBoundaryZ);
+    glVertex3f(x, 0.0F, maxBoundaryZ);
+  }
+  for (float z = minBoundaryZ; z <= maxBoundaryZ + 0.001F; z += 1.0F) {
+    glVertex3f(minBoundaryX, 0.0F, z);
+    glVertex3f(maxBoundaryX, 0.0F, z);
   }
   glEnd();
 }
@@ -1903,13 +1923,16 @@ void drawTileSprite(const TileSet &tileSet, const TileDefinition &tile,
   const glm::vec3 screenRight = camera.right();
   const glm::vec3 screenUp =
       glm::normalize(glm::cross(screenRight, camera.forward()));
+  // Keep the logical tile frame centered on worldPosition so ground sprites
+  // sit in the same grid cell as their PlacedTile coordinates.
   const float left = (static_cast<float>(tile.frameOffset.x) -
                       static_cast<float>(tile.frameSize.x) * 0.5F) *
                      TileSpriteWorldScale;
   const float right =
       left + static_cast<float>(tile.size.x) * TileSpriteWorldScale;
   const float top =
-      (static_cast<float>(tile.frameSize.y - tile.frameOffset.y)) *
+      (static_cast<float>(tile.frameSize.y) * 0.5F -
+       static_cast<float>(tile.frameOffset.y)) *
       TileSpriteWorldScale;
   const float bottom =
       top - static_cast<float>(tile.size.y) * TileSpriteWorldScale;
@@ -2088,7 +2111,7 @@ void renderScene(const Camera &camera, const Character &character,
   loadMatrix(GL_MODELVIEW, camera.viewMatrix());
 
   drawTileSet(tileSet, camera);
-  drawGroundGrid();
+  drawGroundGrid(tileSet);
 
   glPushMatrix();
   glTranslatef(character.position.x, character.position.y,
