@@ -38,6 +38,7 @@ constexpr float CharacterTransitionAnimationPlaybackSpeed = 1.35F;
 constexpr float CharacterStopToIdleBlendDuration = 0.18F;
 constexpr float CharacterStartAccelerationMinScale = 0.12F;
 constexpr float CharacterStopCoastSpeedScale = 0.55F;
+constexpr float CharacterCollisionRadius = 0.22F;
 constexpr float CharacterFallGravity = 18.0F;
 constexpr float CharacterMaxFallSpeed = 24.0F;
 constexpr float CharacterIdleTurnThresholdDegrees = 22.5F;
@@ -1368,6 +1369,101 @@ void loadSavedMapTiles(const std::filesystem::path &mapPath, TileSet &tileSet) {
             << " saved map tile(s) from " << mapPath << ".\n";
 }
 
+void loadSavedMapTiles(const std::filesystem::path &mapPath, TileSet &tileSet) {
+  tileSet.mapTiles.clear();
+  std::ifstream file(mapPath);
+  if (!file) {
+    return;
+  }
+
+  int currentLevel = 0;
+  int currentLayer = 0;
+  int currentX = 0;
+  int currentZ = 0;
+  std::string currentTileName;
+  std::string currentAtlasName;
+  bool hasCurrentTile = false;
+
+  auto commitTile = [&]() {
+    if (!hasCurrentTile || currentTileName.empty()) {
+      return;
+    }
+
+    const std::size_t tileIndex = findTileIndexBySavedReference(
+        tileSet, currentTileName, currentAtlasName);
+    if (tileIndex == std::numeric_limits<std::size_t>::max()) {
+      std::cerr << "Saved map tile '" << currentTileName
+                << "' was not found in loaded tile metadata.\n";
+      return;
+    }
+
+    tileSet.mapTiles.push_back(
+        PlacedTile{tileIndex,
+                   {static_cast<float>(currentX) * tileSet.groundTileCellSize,
+                    static_cast<float>(currentLevel) * WorldLevelHeight,
+                    static_cast<float>(currentZ) * tileSet.groundTileCellSize},
+                   currentLevel,
+                   currentLayer});
+  };
+
+  std::string line;
+  while (std::getline(file, line)) {
+    const std::string trimmed = trimWhitespace(stripTomlComment(line));
+    if (trimmed.empty()) {
+      continue;
+    }
+    if (trimmed == "[[tiles]]") {
+      commitTile();
+      currentLevel = 0;
+      currentLayer = 0;
+      currentX = 0;
+      currentZ = 0;
+      currentTileName.clear();
+      currentAtlasName.clear();
+      hasCurrentTile = true;
+      continue;
+    }
+
+    const std::size_t equalsPosition = trimmed.find('=');
+    if (!hasCurrentTile || equalsPosition == std::string::npos) {
+      continue;
+    }
+
+    const std::string key = trimWhitespace(trimmed.substr(0, equalsPosition));
+    const std::string value =
+        trimWhitespace(trimmed.substr(equalsPosition + 1));
+    if (key == "level") {
+      currentLevel = std::stoi(value);
+    } else if (key == "layer") {
+      currentLayer = std::stoi(value);
+    } else if (key == "x") {
+      currentX = std::stoi(value);
+    } else if (key == "z") {
+      currentZ = std::stoi(value);
+    } else if (key == "name") {
+      currentTileName = parseTomlStringValue(value);
+    } else if (key == "atlas") {
+      currentAtlasName = parseTomlStringValue(value);
+    }
+  }
+
+  commitTile();
+  std::sort(tileSet.mapTiles.begin(), tileSet.mapTiles.end(),
+            [](const PlacedTile &left, const PlacedTile &right) {
+              if (left.level != right.level) {
+                return left.level < right.level;
+              }
+              if (left.layer != right.layer) {
+                return left.layer < right.layer;
+              }
+              const float leftDepth = left.position.x + left.position.z;
+              const float rightDepth = right.position.x + right.position.z;
+              return leftDepth < rightDepth;
+            });
+  std::cout << "Loaded " << tileSet.mapTiles.size()
+            << " saved map tile(s) from " << mapPath << ".\n";
+}
+
 TileSet loadTileSet(const std::filesystem::path &directory) {
   TileSet tileSet;
   if (!std::filesystem::exists(directory)) {
@@ -1610,16 +1706,73 @@ bool hasGroundTileAtPosition(const TileSet &tileSet,
   return false;
 }
 
+bool tileHasFloorCollision(const TileSet &tileSet, const TileDefinition &tile) {
+  const auto collisionIterator = tileSet.collisionDefinitions.find(tile.name);
+  if (collisionIterator == tileSet.collisionDefinitions.end()) {
+    return false;
+  }
+
+  return std::any_of(collisionIterator->second.shapes.begin(),
+                     collisionIterator->second.shapes.end(),
+                     [](const CollisionShape &shape) {
+                       return shape.type == CollisionShapeType::Floor;
+                     });
+}
+
+bool tileHasBlockingCollision(const TileSet &tileSet,
+                              const TileDefinition &tile) {
+  const auto collisionIterator = tileSet.collisionDefinitions.find(tile.name);
+  if (collisionIterator == tileSet.collisionDefinitions.end()) {
+    return false;
+  }
+
+  return std::any_of(collisionIterator->second.shapes.begin(),
+                     collisionIterator->second.shapes.end(),
+                     [](const CollisionShape &shape) {
+                       return shape.type != CollisionShapeType::Floor &&
+                              shape.type != CollisionShapeType::None;
+                     });
+}
+
+bool isInsidePlacedTileCell(const TileSet &tileSet,
+                            const PlacedTile &placedTile,
+                            const glm::vec3 &position, float padding) {
+  const float cellSize = tileSet.groundTileCellSize > 0.0F
+                             ? tileSet.groundTileCellSize
+                             : FallbackGroundTileCellSize;
+  const float halfCellSize = cellSize * 0.5F + padding;
+  return std::abs(position.x - placedTile.position.x) <= halfCellSize &&
+         std::abs(position.z - placedTile.position.z) <= halfCellSize;
+}
+
+bool isBlockedByMapCollision(const TileSet &tileSet, int level,
+                             const glm::vec3 &position) {
+  for (const PlacedTile &placedTile : tileSet.mapTiles) {
+    if (placedTile.level != level || placedTile.layer == 0 ||
+        placedTile.tileIndex >= tileSet.tiles.size()) {
+      continue;
+    }
+
+    const TileDefinition &tile = tileSet.tiles[placedTile.tileIndex];
+    if (!tileHasBlockingCollision(tileSet, tile)) {
+      continue;
+    }
+
+    if (isInsidePlacedTileCell(tileSet, placedTile, position,
+                               CharacterCollisionRadius)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 bool hasWalkableTileAtLevel(const TileSet &tileSet, int level,
                             const glm::vec3 &position) {
   if (level == GroundWorldLevel && hasGroundTileAtPosition(tileSet, position)) {
     return true;
   }
 
-  const float cellSize = tileSet.groundTileCellSize > 0.0F
-                             ? tileSet.groundTileCellSize
-                             : FallbackGroundTileCellSize;
-  const float halfCellSize = cellSize * 0.5F;
   for (const PlacedTile &placedTile : tileSet.mapTiles) {
     if (placedTile.level != level ||
         placedTile.tileIndex >= tileSet.tiles.size()) {
@@ -1627,23 +1780,12 @@ bool hasWalkableTileAtLevel(const TileSet &tileSet, int level,
     }
 
     const TileDefinition &tile = tileSet.tiles[placedTile.tileIndex];
-    const auto collisionIterator = tileSet.collisionDefinitions.find(tile.name);
-    if (collisionIterator == tileSet.collisionDefinitions.end()) {
+    const bool isFloorLayer = placedTile.layer == 0;
+    if (!isFloorLayer && !tileHasFloorCollision(tileSet, tile)) {
       continue;
     }
 
-    const bool isFloorTile =
-        std::any_of(collisionIterator->second.shapes.begin(),
-                    collisionIterator->second.shapes.end(),
-                    [](const CollisionShape &shape) {
-                      return shape.type == CollisionShapeType::Floor;
-                    });
-    if (!isFloorTile) {
-      continue;
-    }
-
-    if (std::abs(position.x - placedTile.position.x) <= halfCellSize &&
-        std::abs(position.z - placedTile.position.z) <= halfCellSize) {
+    if (isInsidePlacedTileCell(tileSet, placedTile, position, 0.0F)) {
       return true;
     }
   }
@@ -1698,6 +1840,33 @@ void updateFallingCharacter(Character &character, const TileSet &tileSet,
   character.animationState = CharacterAnimationState::Idle;
   character.animationTime = 0.0F;
   clearCharacterAnimationBlend(character);
+}
+
+void moveCharacterWithCollision(Character &character, const TileSet &tileSet,
+                                const glm::vec3 &movement) {
+  if (glm::length(movement) <= std::numeric_limits<float>::epsilon()) {
+    return;
+  }
+
+  const glm::vec3 startPosition = character.position;
+  const glm::vec3 targetPosition = startPosition + movement;
+  if (!isBlockedByMapCollision(tileSet, character.level, targetPosition)) {
+    character.position = targetPosition;
+    return;
+  }
+
+  const glm::vec3 xOnlyPosition =
+      startPosition + glm::vec3{movement.x, 0.0F, 0.0F};
+  if (!isBlockedByMapCollision(tileSet, character.level, xOnlyPosition)) {
+    character.position = xOnlyPosition;
+    return;
+  }
+
+  const glm::vec3 zOnlyPosition =
+      startPosition + glm::vec3{0.0F, 0.0F, movement.z};
+  if (!isBlockedByMapCollision(tileSet, character.level, zOnlyPosition)) {
+    character.position = zOnlyPosition;
+  }
 }
 
 float idleTurnMovementScale(const Character &character,
@@ -1937,9 +2106,10 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     if (turnMovementScale > 0.0F) {
       const float accelerationScale =
           idleToWalkAccelerationScale(input.character, animations.idleToWalk);
-      input.character.position += moveDirection * CharacterMoveSpeed *
-                                  accelerationScale * turnMovementScale *
-                                  deltaTime;
+      moveCharacterWithCollision(input.character, tileSet,
+                                 moveDirection * CharacterMoveSpeed *
+                                     accelerationScale * turnMovementScale *
+                                     deltaTime);
       input.character.isMoving = true;
     }
     if (!isTurningInPlace) {
@@ -1951,8 +2121,9 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     const float coastScale =
         walkToStopCoastScale(input.character, animations.walkToStop);
     if (coastScale > 0.0F) {
-      input.character.position +=
-          input.character.facing * CharacterMoveSpeed * coastScale * deltaTime;
+      moveCharacterWithCollision(input.character, tileSet,
+                                 input.character.facing * CharacterMoveSpeed *
+                                     coastScale * deltaTime);
     }
   }
 
@@ -2449,7 +2620,8 @@ void drawTileSprite(const TileSet &tileSet, const TileDefinition &tile,
   glEnd();
 }
 
-void drawTileSet(const TileSet &tileSet, const Camera &camera) {
+void drawTileSet(const TileSet &tileSet, const Camera &camera,
+                 bool drawFloorLayers) {
   if (!tileSet.isLoaded()) {
     return;
   }
@@ -2463,18 +2635,26 @@ void drawTileSet(const TileSet &tileSet, const Camera &camera) {
 
   glDepthMask(GL_FALSE);
 
-  auto drawPlacedTiles = [&](const std::vector<PlacedTile> &placedTiles) {
-    for (const PlacedTile &placedTile : placedTiles) {
-      if (placedTile.tileIndex >= tileSet.tiles.size()) {
-        continue;
-      }
-      drawTileSprite(tileSet, tileSet.tiles[placedTile.tileIndex],
-                     placedTile.position, camera);
+  auto drawPlacedTile = [&](const PlacedTile &placedTile) {
+    if (placedTile.tileIndex >= tileSet.tiles.size()) {
+      return;
     }
+    drawTileSprite(tileSet, tileSet.tiles[placedTile.tileIndex],
+                   placedTile.position, camera);
   };
 
-  drawPlacedTiles(tileSet.groundTiles);
-  drawPlacedTiles(tileSet.mapTiles);
+  if (drawFloorLayers) {
+    for (const PlacedTile &placedTile : tileSet.groundTiles) {
+      drawPlacedTile(placedTile);
+    }
+  }
+
+  for (const PlacedTile &placedTile : tileSet.mapTiles) {
+    const bool isFloorLayer = placedTile.layer == 0;
+    if (isFloorLayer == drawFloorLayers) {
+      drawPlacedTile(placedTile);
+    }
+  }
 
   glDepthMask(GL_TRUE);
   glBindTexture(GL_TEXTURE_2D, 0);
@@ -2601,12 +2781,13 @@ void renderScene(const Camera &camera, const Character &character,
   loadMatrix(GL_PROJECTION, projection);
   loadMatrix(GL_MODELVIEW, camera.viewMatrix());
 
-  drawTileSet(tileSet, camera);
+  drawTileSet(tileSet, camera, true);
   drawGroundGrid(tileSet, GroundTileLayerY, false);
   if (character.level != GroundWorldLevel) {
     drawGroundGrid(
         tileSet, static_cast<float>(character.level) * WorldLevelHeight, true);
   }
+  drawTileSet(tileSet, camera, false);
 
   glPushMatrix();
   glTranslatef(character.position.x, character.position.y,

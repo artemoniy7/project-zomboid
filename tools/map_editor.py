@@ -600,23 +600,39 @@ class MapEditor(tk.Tk):
         self.map_canvas.delete("all")
         self.placement_images.clear()
         level = self.current_level()
-        for x in range(-MAP_HALF_SIZE, MAP_HALF_SIZE + 1):
-            self.draw_grid_line(x, -MAP_HALF_SIZE, x, MAP_HALF_SIZE, "#343434")
-        for z in range(-MAP_HALF_SIZE, MAP_HALF_SIZE + 1):
-            self.draw_grid_line(-MAP_HALF_SIZE, z, MAP_HALF_SIZE, z, "#343434")
-        self.draw_grid_line(0, -MAP_HALF_SIZE, 0, MAP_HALF_SIZE, "#456a9a")
-        self.draw_grid_line(-MAP_HALF_SIZE, 0, MAP_HALF_SIZE, 0, "#456a9a")
+        self.draw_world_grid(is_overlay=False)
 
         placements = [
             (layer, x, z, tile)
             for (tile_level, layer, x, z), tile in self.state_data.placements.items()
             if tile_level == level
         ]
+        floor_placements = [item for item in placements if item[0] == 0]
+        object_placements = [item for item in placements if item[0] != 0]
         for layer, x, z, saved_tile in sorted(
-            placements, key=lambda item: (item[0], item[1] + item[2], item[2])
+            floor_placements, key=lambda item: (item[1] + item[2], item[2])
+        ):
+            self.draw_placement(layer, x, z, saved_tile)
+
+        # Draw a second grid after the floor layer. This keeps the world grid
+        # visible under props/objects without drawing it over floor tiles.
+        self.draw_world_grid(is_overlay=True)
+
+        for layer, x, z, saved_tile in sorted(
+            object_placements, key=lambda item: (item[0], item[1] + item[2], item[2])
         ):
             self.draw_placement(layer, x, z, saved_tile)
         self.refresh_placed_list()
+
+    def draw_world_grid(self, is_overlay: bool) -> None:
+        base_color = "#4a4a4a" if is_overlay else "#343434"
+        axis_color = "#5d86bd" if is_overlay else "#456a9a"
+        for x in range(-MAP_HALF_SIZE, MAP_HALF_SIZE + 1):
+            self.draw_grid_line(x, -MAP_HALF_SIZE, x, MAP_HALF_SIZE, base_color)
+        for z in range(-MAP_HALF_SIZE, MAP_HALF_SIZE + 1):
+            self.draw_grid_line(-MAP_HALF_SIZE, z, MAP_HALF_SIZE, z, base_color)
+        self.draw_grid_line(0, -MAP_HALF_SIZE, 0, MAP_HALF_SIZE, axis_color)
+        self.draw_grid_line(-MAP_HALF_SIZE, 0, MAP_HALF_SIZE, 0, axis_color)
 
     def draw_grid_line(self, x0: int, z0: int, x1: int, z1: int, color: str) -> None:
         sx0, sy0 = self.cell_to_screen(x0, z0)
@@ -645,7 +661,7 @@ class MapEditor(tk.Tk):
         if tile is None:
             self.map_canvas.create_text(
                 cx,
-                cy,
+                cy, 
                 fill="#ff8080",
                 text=f"L{layer}: {saved_tile.tile_name}",
                 width=120,
@@ -653,9 +669,7 @@ class MapEditor(tk.Tk):
             return
         image = self.tile_sprite_image(tile)
         self.placement_images.append(image)
-        self.map_canvas.create_image(
-            cx, cy + TILE_SCREEN_HEIGHT * 0.5, anchor=tk.S, image=image
-        )
+        self.map_canvas.create_image(cx, cy, anchor=tk.CENTER, image=image)
 
     def on_map_motion(self, event: tk.Event) -> None:
         x, z = self.screen_to_cell(event.x, event.y)
