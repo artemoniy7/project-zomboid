@@ -122,7 +122,7 @@ struct TileDefinition {
   glm::ivec2 frameSize{64, 128};
 };
 
-enum class CollisionShapeType { None, FullTile, Aabb, Circle };
+enum class CollisionShapeType { None, FullTile, Aabb, Circle, Segment };
 
 struct CollisionShape {
   CollisionShapeType type = CollisionShapeType::None;
@@ -130,6 +130,9 @@ struct CollisionShape {
   glm::vec2 max{1.0F, 1.0F};
   glm::vec2 center{0.5F, 0.5F};
   float radius = 0.25F;
+  glm::vec2 start{0.5F, 0.0F};
+  glm::vec2 end{0.5F, 1.0F};
+  float thickness = 0.05F;
 };
 
 struct TileCollisionDefinition {
@@ -1009,6 +1012,9 @@ CollisionShapeType collisionShapeTypeFromString(const std::string &value) {
   if (value == "circle") {
     return CollisionShapeType::Circle;
   }
+  if (value == "segment") {
+    return CollisionShapeType::Segment;
+  }
   return CollisionShapeType::None;
 }
 
@@ -1092,6 +1098,18 @@ void parseTileCollisionMetadata(
       }
     } else if (hasCurrentShape && key == "radius") {
       currentShape.radius = std::stof(value);
+    } else if (hasCurrentShape && key == "start") {
+      const std::vector<float> values = parseTomlFloatArray(lines, lineIndex);
+      if (values.size() >= 2) {
+        currentShape.start = {values[0], values[1]};
+      }
+    } else if (hasCurrentShape && key == "end") {
+      const std::vector<float> values = parseTomlFloatArray(lines, lineIndex);
+      if (values.size() >= 2) {
+        currentShape.end = {values[0], values[1]};
+      }
+    } else if (hasCurrentShape && key == "thickness") {
+      currentShape.thickness = std::stof(value);
     }
   }
 

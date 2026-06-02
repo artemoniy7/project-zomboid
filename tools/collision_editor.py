@@ -40,6 +40,9 @@ class CollisionShape:
     max: tuple[float, float] | None = None
     center: tuple[float, float] | None = None
     radius: float | None = None
+    start: tuple[float, float] | None = None
+    end: tuple[float, float] | None = None
+    thickness: float | None = None
 
 
 @dataclass
@@ -220,6 +223,12 @@ def load_collisions(path: Path) -> dict[str, list[CollisionShape]]:
             current_shape.center = _parse_float_array(value)
         elif current_shape is not None and key == "radius":
             current_shape.radius = float(value)
+        elif current_shape is not None and key == "start":
+            current_shape.start = _parse_float_array(value)
+        elif current_shape is not None and key == "end":
+            current_shape.end = _parse_float_array(value)
+        elif current_shape is not None and key == "thickness":
+            current_shape.thickness = float(value)
     commit_shape()
     return collisions
 
@@ -252,6 +261,11 @@ def save_collisions(path: Path, collisions: dict[str, list[CollisionShape]]) -> 
                 lines.append(f"center = {_toml_vec2(shape.center or (0.5, 0.5))}")
                 radius = shape.radius if shape.radius is not None else 0.25
                 lines.append(f"radius = {radius:.4f}")
+            elif shape.type == "segment":
+                lines.append(f"start = {_toml_vec2(shape.start or (0.5, 0.0))}")
+                lines.append(f"end = {_toml_vec2(shape.end or (0.5, 1.0))}")
+                thickness = shape.thickness if shape.thickness is not None else 0.05
+                lines.append(f"thickness = {thickness:.4f}")
         lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -333,6 +347,7 @@ class CollisionEditor(tk.Tk):
         for label, value in (
             ("Rectangle / AABB", "aabb"),
             ("Circle", "circle"),
+            ("Side / wall line", "segment"),
             ("Full tile", "full_tile"),
         ):
             ttk.Radiobutton(
@@ -377,7 +392,7 @@ class CollisionEditor(tk.Tk):
     def open_folder(self, folder: Path, atlas_filter: Path | None) -> None:
         try:
             tiles = load_tile_metadata(folder, atlas_filter)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - UI should show parser errors.
             messagebox.showerror("Could not load tiles", str(exc))
             return
         self.state_data.folder = folder
@@ -494,6 +509,11 @@ class CollisionEditor(tk.Tk):
                 self.shape_list.insert(
                     tk.END,
                     f"{index}. circle center={shape.center} r={shape.radius:.3f}",
+                )
+            elif shape.type == "segment":
+                self.shape_list.insert(
+                    tk.END,
+                    f"{index}. segment start={shape.start} end={shape.end}",
                 )
             else:
                 self.shape_list.insert(
@@ -680,6 +700,16 @@ class CollisionEditor(tk.Tk):
                 cx - radius, cy - radius, cx + radius, cy + radius,
                 outline=color, width=2,
             )
+        elif shape.type == "segment" and shape.start and shape.end:
+            x0 = origin_x + shape.start[0] * sprite_width
+            y0 = origin_y + shape.start[1] * sprite_height
+            x1 = origin_x + shape.end[0] * sprite_width
+            y1 = origin_y + shape.end[1] * sprite_height
+            thickness = max(
+                2,
+                int((shape.thickness or 0.05) * min(sprite_width, sprite_height)),
+            )
+            self.canvas.create_line(x0, y0, x1, y1, fill=color, width=thickness)
 
     def clamp_to_sprite(self, x: int, y: int) -> tuple[int, int]:
         origin_x, origin_y = self.sprite_origin()
@@ -687,6 +717,15 @@ class CollisionEditor(tk.Tk):
         return (
             max(origin_x, min(origin_x + sprite_width, x)),
             max(origin_y, min(origin_y + sprite_height, y)),
+        )
+
+    def normalized_point(self, x: int, y: int) -> tuple[float, float]:
+        origin_x, origin_y = self.sprite_origin()
+        sprite_width, sprite_height = self.sprite_size()
+        clamped_x, clamped_y = self.clamp_to_sprite(x, y)
+        return (
+            (clamped_x - origin_x) / sprite_width,
+            (clamped_y - origin_y) / sprite_height,
         )
 
     def normalized_rect(
@@ -719,7 +758,11 @@ class CollisionEditor(tk.Tk):
             return
         x0, y0 = self.drag_start
         x1, y1 = self.clamp_to_sprite(event.x, event.y)
-        self.redraw_canvas((x0, y0, x1, y1))
+        if self.shape_type.get() == "segment":
+            self.redraw_canvas()
+            self.canvas.create_line(x0, y0, x1, y1, fill="#ffd000", width=4)
+        else:
+            self.redraw_canvas((x0, y0, x1, y1))
 
     def on_drag_end(self, event: tk.Event) -> None:
         if self.current_tile is None or self.drag_start is None:
@@ -727,15 +770,27 @@ class CollisionEditor(tk.Tk):
         x0, y0 = self.drag_start
         x1, y1 = self.clamp_to_sprite(event.x, event.y)
         self.drag_start = None
+        shape_type = self.shape_type.get()
         min_point, max_point = self.normalized_rect((x0, y0, x1, y1))
-        if (
+        if shape_type == "segment":
+            start = self.normalized_point(x0, y0)
+            end = self.normalized_point(x1, y1)
+            if (
+                abs(end[0] - start[0]) < 0.01
+                and abs(end[1] - start[1]) < 0.01
+            ):
+                self.redraw_canvas()
+                return
+            shape = CollisionShape(
+                type="segment", start=start, end=end, thickness=0.05
+            )
+        elif (
             abs(max_point[0] - min_point[0]) < 0.01
             or abs(max_point[1] - min_point[1]) < 0.01
         ):
             self.redraw_canvas()
             return
-        shape_type = self.shape_type.get()
-        if shape_type == "circle":
+        elif shape_type == "circle":
             center = (
                 (min_point[0] + max_point[0]) * 0.5,
                 (min_point[1] + max_point[1]) * 0.5,
