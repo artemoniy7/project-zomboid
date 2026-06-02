@@ -148,17 +148,24 @@ def load_tile_metadata(folder: Path, atlas_filter: Path | None = None) -> list[T
                 )
             )
 
+<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
         metadata_lines = metadata_path.read_text(encoding="utf-8").splitlines()
         line_index = 0
         while line_index < len(metadata_lines):
             line = _strip_comment(metadata_lines[line_index]).strip()
             if not line:
                 line_index += 1
+=======
+        for raw_line in metadata_path.read_text(encoding="utf-8").splitlines():
+            line = _strip_comment(raw_line).strip()
+            if not line:
+>>>>>>> main
                 continue
             if line.startswith("[") and line.endswith("]"):
                 commit()
                 current_name = line[1:-1].strip()
                 current = {}
+<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
                 line_index += 1
                 continue
             if "=" not in line or current_name is None:
@@ -172,6 +179,15 @@ def load_tile_metadata(folder: Path, atlas_filter: Path | None = None) -> list[T
             if parsed is not None:
                 current[key.strip()] = parsed
             line_index += 1
+=======
+                continue
+            if "=" not in line or current_name is None:
+                continue
+            key, value = line.split("=", 1)
+            parsed = _parse_int_array(value)
+            if parsed is not None:
+                current[key.strip()] = parsed
+>>>>>>> main
         commit()
     return tiles
 
@@ -392,10 +408,14 @@ class CollisionEditor(tk.Tk):
         self.refresh_tile_list()
         mode = atlas_filter.name if atlas_filter is not None else "all atlases"
         self.status.set(f"Loaded {len(tiles)} tile(s) from {mode} in {folder}")
+<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
         if self.filtered_tiles():
             self.select_tile_by_index(0)
         else:
             self.redraw_canvas()
+=======
+        self.redraw_canvas()
+>>>>>>> main
 
     def refresh_atlas_combo(self) -> None:
         atlas_names = ["All atlases"]
@@ -410,6 +430,7 @@ class CollisionEditor(tk.Tk):
 
     def on_atlas_selected(self, _event: tk.Event) -> None:
         self.refresh_tile_list()
+<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
         self.current_tile = None
         self.current_tile_image = None
         if self.filtered_tiles():
@@ -417,6 +438,8 @@ class CollisionEditor(tk.Tk):
         else:
             self.refresh_shape_list()
             self.redraw_canvas()
+=======
+>>>>>>> main
 
     def tile_visible_in_filters(self, tile: TileDef) -> bool:
         query = self.tile_filter.get().lower()
@@ -530,6 +553,7 @@ class CollisionEditor(tk.Tk):
     ) -> None:
         self.canvas.delete("all")
         if self.current_tile is None:
+<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
             message = "Select a tile or open one PNG atlas."
             if self.state_data.folder is not None and not self.state_data.tiles:
                 message = (
@@ -538,13 +562,19 @@ class CollisionEditor(tk.Tk):
                 )
             elif self.state_data.tiles:
                 message = "No tile matches the current atlas/filter selection."
+=======
+>>>>>>> main
             self.canvas.create_text(
                 20,
                 20,
                 anchor=tk.NW,
                 fill="white",
+<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
                 text=message,
                 width=720,
+=======
+                text="Select a tile or open one PNG atlas.",
+>>>>>>> main
             )
             return
 
