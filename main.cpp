@@ -1274,85 +1274,6 @@ void buildGroundTilePlacements(TileSet &tileSet) {
           0});
     }
   }
-}
-
-void loadSavedMapTiles(const std::filesystem::path &mapPath, TileSet &tileSet) {
-  tileSet.mapTiles.clear();
-  std::ifstream file(mapPath);
-  if (!file) {
-    return;
-  }
-
-  int currentLevel = 0;
-  int currentLayer = 0;
-  int currentX = 0;
-  int currentZ = 0;
-  std::string currentTileName;
-  std::string currentAtlasName;
-  bool hasCurrentTile = false;
-
-  auto commitTile = [&]() {
-    if (!hasCurrentTile || currentTileName.empty()) {
-      return;
-    }
-
-    const std::size_t tileIndex = findTileIndexBySavedReference(
-        tileSet, currentTileName, currentAtlasName);
-    if (tileIndex == std::numeric_limits<std::size_t>::max()) {
-      std::cerr << "Saved map tile '" << currentTileName
-                << "' was not found in loaded tile metadata.\n";
-      return;
-    }
-
-    tileSet.mapTiles.push_back(
-        PlacedTile{tileIndex,
-                   {static_cast<float>(currentX) * tileSet.groundTileCellSize,
-                    static_cast<float>(currentLevel) * WorldLevelHeight,
-                    static_cast<float>(currentZ) * tileSet.groundTileCellSize},
-                   currentLevel,
-                   currentLayer});
-  };
-
-  std::string line;
-  while (std::getline(file, line)) {
-    const std::string trimmed = trimWhitespace(stripTomlComment(line));
-    if (trimmed.empty()) {
-      continue;
-    }
-    if (trimmed == "[[tiles]]") {
-      commitTile();
-      currentLevel = 0;
-      currentLayer = 0;
-      currentX = 0;
-      currentZ = 0;
-      currentTileName.clear();
-      currentAtlasName.clear();
-      hasCurrentTile = true;
-      continue;
-    }
-
-    const std::size_t equalsPosition = trimmed.find('=');
-    if (!hasCurrentTile || equalsPosition == std::string::npos) {
-      continue;
-    }
-
-    const std::string key = trimWhitespace(trimmed.substr(0, equalsPosition));
-    const std::string value =
-        trimWhitespace(trimmed.substr(equalsPosition + 1));
-    if (key == "level") {
-      currentLevel = std::stoi(value);
-    } else if (key == "layer") {
-      currentLayer = std::stoi(value);
-    } else if (key == "x") {
-      currentX = std::stoi(value);
-    } else if (key == "z") {
-      currentZ = std::stoi(value);
-    } else if (key == "name") {
-      currentTileName = parseTomlStringValue(value);
-    } else if (key == "atlas") {
-      currentAtlasName = parseTomlStringValue(value);
-    }
-  }
 
   commitTile();
   std::sort(tileSet.mapTiles.begin(), tileSet.mapTiles.end(),
@@ -1371,99 +1292,22 @@ void loadSavedMapTiles(const std::filesystem::path &mapPath, TileSet &tileSet) {
             << " saved map tile(s) from " << mapPath << ".\n";
 }
 
-void loadSavedMapTiles(const std::filesystem::path &mapPath, TileSet &tileSet) {
-  tileSet.mapTiles.clear();
-  std::ifstream file(mapPath);
-  if (!file) {
-    return;
+bool placedTileDrawOrderLess(const PlacedTile &left, const PlacedTile &right) {
+  if (left.level != right.level) {
+    return left.level < right.level;
   }
-
-  int currentLevel = 0;
-  int currentLayer = 0;
-  int currentX = 0;
-  int currentZ = 0;
-  std::string currentTileName;
-  std::string currentAtlasName;
-  bool hasCurrentTile = false;
-
-  auto commitTile = [&]() {
-    if (!hasCurrentTile || currentTileName.empty()) {
-      return;
-    }
-
-    const std::size_t tileIndex = findTileIndexBySavedReference(
-        tileSet, currentTileName, currentAtlasName);
-    if (tileIndex == std::numeric_limits<std::size_t>::max()) {
-      std::cerr << "Saved map tile '" << currentTileName
-                << "' was not found in loaded tile metadata.\n";
-      return;
-    }
-
-    tileSet.mapTiles.push_back(
-        PlacedTile{tileIndex,
-                   {static_cast<float>(currentX) * tileSet.groundTileCellSize,
-                    static_cast<float>(currentLevel) * WorldLevelHeight,
-                    static_cast<float>(currentZ) * tileSet.groundTileCellSize},
-                   currentLevel,
-                   currentLayer});
-  };
-
-  std::string line;
-  while (std::getline(file, line)) {
-    const std::string trimmed = trimWhitespace(stripTomlComment(line));
-    if (trimmed.empty()) {
-      continue;
-    }
-    if (trimmed == "[[tiles]]") {
-      commitTile();
-      currentLevel = 0;
-      currentLayer = 0;
-      currentX = 0;
-      currentZ = 0;
-      currentTileName.clear();
-      currentAtlasName.clear();
-      hasCurrentTile = true;
-      continue;
-    }
-
-    const std::size_t equalsPosition = trimmed.find('=');
-    if (!hasCurrentTile || equalsPosition == std::string::npos) {
-      continue;
-    }
-
-    const std::string key = trimWhitespace(trimmed.substr(0, equalsPosition));
-    const std::string value =
-        trimWhitespace(trimmed.substr(equalsPosition + 1));
-    if (key == "level") {
-      currentLevel = std::stoi(value);
-    } else if (key == "layer") {
-      currentLayer = std::stoi(value);
-    } else if (key == "x") {
-      currentX = std::stoi(value);
-    } else if (key == "z") {
-      currentZ = std::stoi(value);
-    } else if (key == "name") {
-      currentTileName = parseTomlStringValue(value);
-    } else if (key == "atlas") {
-      currentAtlasName = parseTomlStringValue(value);
-    }
+  if (left.layer != right.layer) {
+    return left.layer < right.layer;
   }
-
-  commitTile();
-  std::sort(tileSet.mapTiles.begin(), tileSet.mapTiles.end(),
-            [](const PlacedTile &left, const PlacedTile &right) {
-              if (left.level != right.level) {
-                return left.level < right.level;
-              }
-              if (left.layer != right.layer) {
-                return left.layer < right.layer;
-              }
-              const float leftDepth = left.position.x + left.position.z;
-              const float rightDepth = right.position.x + right.position.z;
-              return leftDepth < rightDepth;
-            });
-  std::cout << "Loaded " << tileSet.mapTiles.size()
-            << " saved map tile(s) from " << mapPath << ".\n";
+  const float leftDepth = left.position.x + left.position.z;
+  const float rightDepth = right.position.x + right.position.z;
+  if (leftDepth != rightDepth) {
+    return leftDepth < rightDepth;
+  }
+  if (left.position.z != right.position.z) {
+    return left.position.z < right.position.z;
+  }
+  return left.tileIndex < right.tileIndex;
 }
 
 void loadSavedMapTiles(const std::filesystem::path &mapPath, TileSet &tileSet) {
@@ -1546,17 +1390,7 @@ void loadSavedMapTiles(const std::filesystem::path &mapPath, TileSet &tileSet) {
 
   commitTile();
   std::sort(tileSet.mapTiles.begin(), tileSet.mapTiles.end(),
-            [](const PlacedTile &left, const PlacedTile &right) {
-              if (left.level != right.level) {
-                return left.level < right.level;
-              }
-              if (left.layer != right.layer) {
-                return left.layer < right.layer;
-              }
-              const float leftDepth = left.position.x + left.position.z;
-              const float rightDepth = right.position.x + right.position.z;
-              return leftDepth < rightDepth;
-            });
+            placedTileDrawOrderLess);
   std::cout << "Loaded " << tileSet.mapTiles.size()
             << " saved map tile(s) from " << mapPath << ".\n";
 }
