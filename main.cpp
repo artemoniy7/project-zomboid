@@ -1274,6 +1274,22 @@ void buildGroundTilePlacements(TileSet &tileSet) {
           0});
     }
   }
+
+  commitTile();
+  std::sort(tileSet.mapTiles.begin(), tileSet.mapTiles.end(),
+            [](const PlacedTile &left, const PlacedTile &right) {
+              if (left.level != right.level) {
+                return left.level < right.level;
+              }
+              if (left.layer != right.layer) {
+                return left.layer < right.layer;
+              }
+              const float leftDepth = left.position.x + left.position.z;
+              const float rightDepth = right.position.x + right.position.z;
+              return leftDepth < rightDepth;
+            });
+  std::cout << "Loaded " << tileSet.mapTiles.size()
+            << " saved map tile(s) from " << mapPath << ".\n";
 }
 
 bool placedTileDrawOrderLess(const PlacedTile &left, const PlacedTile &right) {
