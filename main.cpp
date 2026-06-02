@@ -82,6 +82,8 @@ constexpr const char *GroundTileName = "blends_natural_01_TEST_22";
 constexpr int GroundTileHalfSize = 20;
 constexpr float GroundTileLayerY = -0.01F;
 constexpr float FallbackGroundTileCellSize = 0.70710678F;
+constexpr float TileScreenRightAlignmentCells = 0.5F;
+constexpr float TileScreenUpAlignmentCells = 0.5F;
 constexpr float LevelHeightInSpritePixels = 128.0F;
 constexpr float WorldLevelHeight =
     LevelHeightInSpritePixels * TileSpriteWorldScale;
@@ -2513,12 +2515,19 @@ void drawTileSprite(const TileSet &tileSet, const TileDefinition &tile,
   const glm::vec3 screenUp =
       glm::normalize(glm::cross(screenRight, camera.forward()));
   // Ground metadata can describe a cropped sprite inside a taller logical
-  // frame. Center the visible sprite itself on worldPosition so the tile art
-  // sits inside the same grid cell as its PlacedTile coordinate.
+  // frame. Center the visible sprite itself on worldPosition, then apply a
+  // half-grid screen-space correction so authored map tiles sit on the same
+  // visual cell center as the world grid.
   const float halfWidth =
       static_cast<float>(tile.size.x) * TileSpriteWorldScale * 0.5F;
   const float halfHeight =
       static_cast<float>(tile.size.y) * TileSpriteWorldScale * 0.5F;
+  const float projectedCellWidth = tileSet.groundTileCellSize * std::sqrt(2.0F);
+  const float projectedCellHeight = projectedCellWidth * 0.5F;
+  const glm::vec3 alignedWorldPosition =
+      worldPosition +
+      screenRight * (projectedCellWidth * TileScreenRightAlignmentCells) +
+      screenUp * (projectedCellHeight * TileScreenUpAlignmentCells);
   const float left = -halfWidth;
   const float right = halfWidth;
   const float top = halfHeight;
@@ -2537,18 +2546,19 @@ void drawTileSprite(const TileSet &tileSet, const TileDefinition &tile,
   glBegin(GL_QUADS);
   glTexCoord2f(u0, v0);
   const glm::vec3 bottomLeft =
-      worldPosition + screenRight * left + screenUp * bottom;
+      alignedWorldPosition + screenRight * left + screenUp * bottom;
   glVertex3f(bottomLeft.x, bottomLeft.y, bottomLeft.z);
   glTexCoord2f(u1, v0);
   const glm::vec3 bottomRight =
-      worldPosition + screenRight * right + screenUp * bottom;
+      alignedWorldPosition + screenRight * right + screenUp * bottom;
   glVertex3f(bottomRight.x, bottomRight.y, bottomRight.z);
   glTexCoord2f(u1, v1);
   const glm::vec3 topRight =
-      worldPosition + screenRight * right + screenUp * top;
+      alignedWorldPosition + screenRight * right + screenUp * top;
   glVertex3f(topRight.x, topRight.y, topRight.z);
   glTexCoord2f(u0, v1);
-  const glm::vec3 topLeft = worldPosition + screenRight * left + screenUp * top;
+  const glm::vec3 topLeft =
+      alignedWorldPosition + screenRight * left + screenUp * top;
   glVertex3f(topLeft.x, topLeft.y, topLeft.z);
   glEnd();
 }

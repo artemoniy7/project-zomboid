@@ -23,6 +23,8 @@ MAX_LEVEL = 10
 MAP_HALF_SIZE = 20
 TILE_SCREEN_WIDTH = 64
 TILE_SCREEN_HEIGHT = 32
+TILE_SCREEN_RIGHT_ALIGNMENT_CELLS = 0.5
+TILE_SCREEN_UP_ALIGNMENT_CELLS = 0.5
 CANVAS_PADDING = 160
 PNG_FILETYPES = (("PNG atlas", ("*.png", "*.PNG")), ("All files", "*.*"))
 MAP_FILETYPES = (("Map TOML", ("*.toml", "*.TOML")), ("All files", "*.*"))
@@ -669,7 +671,11 @@ class MapEditor(tk.Tk):
             return
         image = self.tile_sprite_image(tile)
         self.placement_images.append(image)
-        self.map_canvas.create_image(cx, cy, anchor=tk.CENTER, image=image)
+        aligned_x = cx + TILE_SCREEN_WIDTH * TILE_SCREEN_RIGHT_ALIGNMENT_CELLS
+        aligned_y = cy - TILE_SCREEN_HEIGHT * TILE_SCREEN_UP_ALIGNMENT_CELLS
+        self.map_canvas.create_image(
+            aligned_x, aligned_y, anchor=tk.CENTER, image=image
+        )
 
     def on_map_motion(self, event: tk.Event) -> None:
         x, z = self.screen_to_cell(event.x, event.y)
