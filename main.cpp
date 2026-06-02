@@ -1937,13 +1937,16 @@ void drawTileSprite(const TileSet &tileSet, const TileDefinition &tile,
   const glm::vec3 screenRight = camera.right();
   const glm::vec3 screenUp =
       glm::normalize(glm::cross(screenRight, camera.forward()));
+  // Keep the logical tile frame centered on worldPosition so ground sprites
+  // sit in the same grid cell as their PlacedTile coordinates.
   const float left = (static_cast<float>(tile.frameOffset.x) -
                       static_cast<float>(tile.frameSize.x) * 0.5F) *
                      TileSpriteWorldScale;
   const float right =
       left + static_cast<float>(tile.size.x) * TileSpriteWorldScale;
   const float top =
-      (static_cast<float>(tile.frameSize.y - tile.frameOffset.y)) *
+      (static_cast<float>(tile.frameSize.y) * 0.5F -
+       static_cast<float>(tile.frameOffset.y)) *
       TileSpriteWorldScale;
   const float bottom =
       top - static_cast<float>(tile.size.y) * TileSpriteWorldScale;
