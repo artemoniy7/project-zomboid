@@ -74,6 +74,7 @@ constexpr float TileSpriteWorldScale = 1.0F / 64.0F;
 constexpr const char *GroundTileName = "blends_natural_01_TEST_22";
 constexpr int GroundTileHalfSize = 20;
 constexpr float GroundTileLayerY = -0.01F;
+constexpr float FallbackWorldGridCellSize = 1.0F;
 
 struct Vertex {
   glm::vec3 position{};
@@ -135,6 +136,7 @@ struct TileSet {
   std::vector<TileAtlas> atlases;
   std::vector<TileDefinition> tiles;
   std::vector<PlacedTile> groundTiles;
+  float worldGridCellSize = FallbackWorldGridCellSize;
 
   [[nodiscard]] bool isLoaded() const {
     return !atlases.empty() && !tiles.empty();
@@ -1026,8 +1028,15 @@ std::size_t findTileIndexByName(const TileSet &tileSet,
   return std::numeric_limits<std::size_t>::max();
 }
 
+float worldGridCellSizeForTile(const TileDefinition &tile) {
+  const int pixelWidth = tile.frameSize.x > 0 ? tile.frameSize.x : tile.size.x;
+  const float cellSize = static_cast<float>(pixelWidth) * TileSpriteWorldScale;
+  return cellSize > 0.0F ? cellSize : FallbackWorldGridCellSize;
+}
+
 void buildGroundTilePlacements(TileSet &tileSet) {
   tileSet.groundTiles.clear();
+  tileSet.worldGridCellSize = FallbackWorldGridCellSize;
   const std::size_t groundTileIndex =
       findTileIndexByName(tileSet, GroundTileName);
   if (groundTileIndex == std::numeric_limits<std::size_t>::max()) {
@@ -1036,11 +1045,16 @@ void buildGroundTilePlacements(TileSet &tileSet) {
     return;
   }
 
+  tileSet.worldGridCellSize =
+      worldGridCellSizeForTile(tileSet.tiles[groundTileIndex]);
+
   for (int z = -GroundTileHalfSize; z <= GroundTileHalfSize; ++z) {
     for (int x = -GroundTileHalfSize; x <= GroundTileHalfSize; ++x) {
       tileSet.groundTiles.push_back(PlacedTile{
           groundTileIndex,
-          {static_cast<float>(x), GroundTileLayerY, static_cast<float>(z)}});
+          {static_cast<float>(x) * tileSet.worldGridCellSize,
+           GroundTileLayerY,
+           static_cast<float>(z) * tileSet.worldGridCellSize}});
     }
   }
 }
@@ -1495,19 +1509,25 @@ void loadMatrix(GLenum matrixMode, const glm::mat4 &matrix) {
   glLoadMatrixf(glm::value_ptr(matrix));
 }
 
-void drawGroundGrid() {
-  constexpr int GridHalfSize = 20;
+void drawGroundGrid(const TileSet &tileSet) {
+  const float cellSize = tileSet.worldGridCellSize > 0.0F
+                             ? tileSet.worldGridCellSize
+                             : FallbackWorldGridCellSize;
+  const float minCoordinate =
+      (static_cast<float>(-GroundTileHalfSize) - 0.5F) * cellSize;
+  const float maxCoordinate =
+      (static_cast<float>(GroundTileHalfSize) + 0.5F) * cellSize;
+
   glColor3f(0.28F, 0.42F, 0.24F);
   glBegin(GL_LINES);
-  for (int line = -GridHalfSize; line <= GridHalfSize; ++line) {
-    glVertex3f(static_cast<float>(line), 0.0F,
-               static_cast<float>(-GridHalfSize));
-    glVertex3f(static_cast<float>(line), 0.0F,
-               static_cast<float>(GridHalfSize));
-    glVertex3f(static_cast<float>(-GridHalfSize), 0.0F,
-               static_cast<float>(line));
-    glVertex3f(static_cast<float>(GridHalfSize), 0.0F,
-               static_cast<float>(line));
+  for (int boundary = -GroundTileHalfSize; boundary <= GroundTileHalfSize + 1;
+       ++boundary) {
+    const float coordinate =
+        (static_cast<float>(boundary) - 0.5F) * cellSize;
+    glVertex3f(coordinate, 0.0F, minCoordinate);
+    glVertex3f(coordinate, 0.0F, maxCoordinate);
+    glVertex3f(minCoordinate, 0.0F, coordinate);
+    glVertex3f(maxCoordinate, 0.0F, coordinate);
   }
   glEnd();
 }
@@ -2088,7 +2108,7 @@ void renderScene(const Camera &camera, const Character &character,
   loadMatrix(GL_MODELVIEW, camera.viewMatrix());
 
   drawTileSet(tileSet, camera);
-  drawGroundGrid();
+  drawGroundGrid(tileSet);
 
   glPushMatrix();
   glTranslatef(character.position.x, character.position.y,
