@@ -148,24 +148,17 @@ def load_tile_metadata(folder: Path, atlas_filter: Path | None = None) -> list[T
                 )
             )
 
-<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
         metadata_lines = metadata_path.read_text(encoding="utf-8").splitlines()
         line_index = 0
         while line_index < len(metadata_lines):
             line = _strip_comment(metadata_lines[line_index]).strip()
             if not line:
                 line_index += 1
-=======
-        for raw_line in metadata_path.read_text(encoding="utf-8").splitlines():
-            line = _strip_comment(raw_line).strip()
-            if not line:
->>>>>>> main
                 continue
             if line.startswith("[") and line.endswith("]"):
                 commit()
                 current_name = line[1:-1].strip()
                 current = {}
-<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
                 line_index += 1
                 continue
             if "=" not in line or current_name is None:
@@ -179,15 +172,6 @@ def load_tile_metadata(folder: Path, atlas_filter: Path | None = None) -> list[T
             if parsed is not None:
                 current[key.strip()] = parsed
             line_index += 1
-=======
-                continue
-            if "=" not in line or current_name is None:
-                continue
-            key, value = line.split("=", 1)
-            parsed = _parse_int_array(value)
-            if parsed is not None:
-                current[key.strip()] = parsed
->>>>>>> main
         commit()
     return tiles
 
@@ -393,7 +377,7 @@ class CollisionEditor(tk.Tk):
     def open_folder(self, folder: Path, atlas_filter: Path | None) -> None:
         try:
             tiles = load_tile_metadata(folder, atlas_filter)
-        except Exception as exc:  # noqa: BLE001 - UI should show parser errors.
+        except Exception as exc:
             messagebox.showerror("Could not load tiles", str(exc))
             return
         self.state_data.folder = folder
@@ -408,14 +392,10 @@ class CollisionEditor(tk.Tk):
         self.refresh_tile_list()
         mode = atlas_filter.name if atlas_filter is not None else "all atlases"
         self.status.set(f"Loaded {len(tiles)} tile(s) from {mode} in {folder}")
-<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
         if self.filtered_tiles():
             self.select_tile_by_index(0)
         else:
             self.redraw_canvas()
-=======
-        self.redraw_canvas()
->>>>>>> main
 
     def refresh_atlas_combo(self) -> None:
         atlas_names = ["All atlases"]
@@ -430,7 +410,6 @@ class CollisionEditor(tk.Tk):
 
     def on_atlas_selected(self, _event: tk.Event) -> None:
         self.refresh_tile_list()
-<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
         self.current_tile = None
         self.current_tile_image = None
         if self.filtered_tiles():
@@ -438,8 +417,6 @@ class CollisionEditor(tk.Tk):
         else:
             self.refresh_shape_list()
             self.redraw_canvas()
-=======
->>>>>>> main
 
     def tile_visible_in_filters(self, tile: TileDef) -> bool:
         query = self.tile_filter.get().lower()
@@ -553,7 +530,6 @@ class CollisionEditor(tk.Tk):
     ) -> None:
         self.canvas.delete("all")
         if self.current_tile is None:
-<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
             message = "Select a tile or open one PNG atlas."
             if self.state_data.folder is not None and not self.state_data.tiles:
                 message = (
@@ -562,19 +538,13 @@ class CollisionEditor(tk.Tk):
                 )
             elif self.state_data.tiles:
                 message = "No tile matches the current atlas/filter selection."
-=======
->>>>>>> main
             self.canvas.create_text(
                 20,
                 20,
                 anchor=tk.NW,
                 fill="white",
-<<<<<<< codex/adjust-world-grid-to-tile-sizes-1tnjlg
                 text=message,
                 width=720,
-=======
-                text="Select a tile or open one PNG atlas.",
->>>>>>> main
             )
             return
 
@@ -584,11 +554,11 @@ class CollisionEditor(tk.Tk):
         canvas_width = sprite_width + CANVAS_PADDING * 2
         canvas_height = sprite_height + CANVAS_PADDING * 2
         self.canvas.config(scrollregion=(0, 0, canvas_width, canvas_height))
-        self.draw_projected_cell_guide(
-            origin_x, origin_y, sprite_width, sprite_height
-        )
         self.canvas.create_image(
             origin_x, origin_y, anchor=tk.NW, image=self.tile_sprite_image(tile)
+        )
+        self.draw_projected_cell_guide(
+            origin_x, origin_y, sprite_width, sprite_height
         )
         self.canvas.create_rectangle(
             origin_x, origin_y, origin_x + sprite_width, origin_y + sprite_height,
@@ -615,13 +585,47 @@ class CollisionEditor(tk.Tk):
                 *preview, outline="#ffd000", width=2, dash=(4, 3)
             )
 
+    def projected_cell_rect_pixels(self) -> tuple[float, float, float, float]:
+        origin_x, origin_y = self.sprite_origin()
+        sprite_width, sprite_height = self.sprite_size()
+        diamond_width = sprite_width
+        diamond_height = sprite_width * 0.5
+        center_x = origin_x + sprite_width * 0.5
+        center_y = origin_y + max(
+            diamond_height * 0.5, sprite_height - diamond_height * 0.5
+        )
+        return (
+            center_x - diamond_width * 0.5,
+            center_y - diamond_height * 0.5,
+            center_x + diamond_width * 0.5,
+            center_y + diamond_height * 0.5,
+        )
+
+    def projected_cell_rect_normalized(
+        self,
+    ) -> tuple[tuple[float, float], tuple[float, float]]:
+        origin_x, origin_y = self.sprite_origin()
+        sprite_width, sprite_height = self.sprite_size()
+        left, top, right, bottom = self.projected_cell_rect_pixels()
+        return (
+            (
+                (left - origin_x) / sprite_width,
+                (top - origin_y) / sprite_height,
+            ),
+            (
+                (right - origin_x) / sprite_width,
+                (bottom - origin_y) / sprite_height,
+            ),
+        )
+
     def draw_projected_cell_guide(
         self, origin_x: int, origin_y: int, sprite_width: int, sprite_height: int
     ) -> None:
-        center_x = origin_x + sprite_width * 0.5
-        center_y = origin_y + sprite_height * 0.5
-        diamond_width = sprite_width
-        diamond_height = sprite_width * 0.5
+        left, top, right, bottom = self.projected_cell_rect_pixels()
+        center_x = (left + right) * 0.5
+        center_y = (top + bottom) * 0.5
+        diamond_width = right - left
+        diamond_height = bottom - top
         points = [
             center_x, center_y - diamond_height * 0.5,
             center_x + diamond_width * 0.5, center_y,
@@ -742,8 +746,9 @@ class CollisionEditor(tk.Tk):
             )
             shape = CollisionShape(type="circle", center=center, radius=radius)
         elif shape_type == "full_tile":
+            min_point, max_point = self.projected_cell_rect_normalized()
             shape = CollisionShape(
-                type="full_tile", min=(0.0, 0.0), max=(1.0, 1.0)
+                type="full_tile", min=min_point, max=max_point
             )
         else:
             shape = CollisionShape(type="aabb", min=min_point, max=max_point)
@@ -756,8 +761,9 @@ class CollisionEditor(tk.Tk):
     def add_full_tile(self) -> None:
         if self.current_tile is None:
             return
+        min_point, max_point = self.projected_cell_rect_normalized()
         self.state_data.collisions.setdefault(self.current_tile.name, []).append(
-            CollisionShape(type="full_tile", min=(0.0, 0.0), max=(1.0, 1.0))
+            CollisionShape(type="full_tile", min=min_point, max=max_point)
         )
         self.refresh_shape_list()
         self.redraw_canvas()
