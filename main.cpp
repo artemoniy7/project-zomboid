@@ -75,6 +75,11 @@ constexpr const char *GroundTileName = "blends_natural_01_TEST_22";
 constexpr int GroundTileHalfSize = 20;
 constexpr float GroundTileLayerY = -0.01F;
 constexpr float FallbackGroundTileCellSize = 0.70710678F;
+constexpr float LevelHeightInSpritePixels = 128.0F;
+constexpr float WorldLevelHeight =
+    LevelHeightInSpritePixels * TileSpriteWorldScale;
+constexpr int MinWorldLevel = 0;
+constexpr int MaxWorldLevel = 7;
 
 struct Vertex {
   glm::vec3 position{};
@@ -280,6 +285,7 @@ enum class CharacterAnimationState {
 
 struct Character {
   glm::vec3 position{0.0F, 0.0F, 0.0F};
+  int level = 0;
   glm::vec3 facing{0.0F, 0.0F, 1.0F};
   glm::vec3 turnStartFacing{0.0F, 0.0F, 1.0F};
   glm::vec3 turnTargetFacing{0.0F, 0.0F, 1.0F};
@@ -302,6 +308,8 @@ struct Character {
 struct InputState {
   Camera camera;
   Character character;
+  bool wasLevelUpPressed = false;
+  bool wasLevelDownPressed = false;
 };
 
 glm::mat4 toGlm(const aiMatrix4x4 &matrix) {
@@ -1632,6 +1640,23 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     glfwSetWindowShouldClose(window, GLFW_TRUE);
   }
 
+  const bool isLevelUpPressed =
+      glfwGetKey(window, GLFW_KEY_PAGE_UP) == GLFW_PRESS;
+  const bool isLevelDownPressed =
+      glfwGetKey(window, GLFW_KEY_PAGE_DOWN) == GLFW_PRESS;
+  if (isLevelUpPressed && !input.wasLevelUpPressed) {
+    input.character.level =
+        std::min(input.character.level + 1, MaxWorldLevel);
+  }
+  if (isLevelDownPressed && !input.wasLevelDownPressed) {
+    input.character.level =
+        std::max(input.character.level - 1, MinWorldLevel);
+  }
+  input.wasLevelUpPressed = isLevelUpPressed;
+  input.wasLevelDownPressed = isLevelDownPressed;
+  input.character.position.y =
+      static_cast<float>(input.character.level) * WorldLevelHeight;
+
   glm::vec3 movement{0.0F, 0.0F, 0.0F};
   if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
     movement += screenDirectionToWorldDirection(0.0F, 1.0F);
@@ -1682,6 +1707,8 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     }
   }
 
+  input.character.position.y =
+      static_cast<float>(input.character.level) * WorldLevelHeight;
   input.camera.target = input.character.position;
 }
 
@@ -1690,7 +1717,7 @@ void loadMatrix(GLenum matrixMode, const glm::mat4 &matrix) {
   glLoadMatrixf(glm::value_ptr(matrix));
 }
 
-void drawGroundGrid(const TileSet &tileSet) {
+void drawGroundGrid(const TileSet &tileSet, float levelY, bool isActiveLevel) {
   float minX = static_cast<float>(-GroundTileHalfSize);
   float maxX = static_cast<float>(GroundTileHalfSize);
   float minZ = static_cast<float>(-GroundTileHalfSize);
@@ -1717,17 +1744,21 @@ void drawGroundGrid(const TileSet &tileSet) {
   const float minBoundaryZ = minZ - cellSize * 0.5F;
   const float maxBoundaryZ = maxZ + cellSize * 0.5F;
 
-  glColor3f(0.28F, 0.42F, 0.24F);
+  if (isActiveLevel) {
+    glColor3f(0.32F, 0.52F, 0.78F);
+  } else {
+    glColor3f(0.28F, 0.42F, 0.24F);
+  }
   glBegin(GL_LINES);
   for (float x = minBoundaryX; x <= maxBoundaryX + cellSize * 0.001F;
        x += cellSize) {
-    glVertex3f(x, 0.0F, minBoundaryZ);
-    glVertex3f(x, 0.0F, maxBoundaryZ);
+    glVertex3f(x, levelY, minBoundaryZ);
+    glVertex3f(x, levelY, maxBoundaryZ);
   }
   for (float z = minBoundaryZ; z <= maxBoundaryZ + cellSize * 0.001F;
        z += cellSize) {
-    glVertex3f(minBoundaryX, 0.0F, z);
-    glVertex3f(maxBoundaryX, 0.0F, z);
+    glVertex3f(minBoundaryX, levelY, z);
+    glVertex3f(maxBoundaryX, levelY, z);
   }
   glEnd();
 }
@@ -2309,7 +2340,12 @@ void renderScene(const Camera &camera, const Character &character,
   loadMatrix(GL_MODELVIEW, camera.viewMatrix());
 
   drawTileSet(tileSet, camera);
-  drawGroundGrid(tileSet);
+  drawGroundGrid(tileSet, GroundTileLayerY, false);
+  if (character.level > MinWorldLevel) {
+    drawGroundGrid(tileSet,
+                   static_cast<float>(character.level) * WorldLevelHeight,
+                   true);
+  }
 
   glPushMatrix();
   glTranslatef(character.position.x, character.position.y,
