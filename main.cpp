@@ -137,7 +137,15 @@ struct TileDefinition {
   glm::ivec2 frameSize{64, 128};
 };
 
-enum class CollisionShapeType { None, FullTile, Floor, Aabb, Circle, Segment };
+enum class CollisionShapeType {
+  None,
+  FullTile,
+  Floor,
+  Aabb,
+  Circle,
+  Diamond,
+  Segment
+};
 
 struct CollisionShape {
   CollisionShapeType type = CollisionShapeType::None;
@@ -1039,6 +1047,9 @@ CollisionShapeType collisionShapeTypeFromString(const std::string &value) {
   if (value == "circle") {
     return CollisionShapeType::Circle;
   }
+  if (value == "diamond") {
+    return CollisionShapeType::Diamond;
+  }
   if (value == "segment") {
     return CollisionShapeType::Segment;
   }
@@ -1287,17 +1298,7 @@ void buildGroundTilePlacements(TileSet &tileSet) {
           0});
     }
 
-    appendCurrentTile();
-    std::sort(tileSet.mapTiles.begin(), tileSet.mapTiles.end(),
-              PlacedTileDrawOrderLess{});
-    std::cout << "Loaded " << tileSet.mapTiles.size()
-              << " saved map tile(s) from " << mapPath << ".\n";
   }
-};
-
-void loadDefaultSavedMapTiles(TileSet &tileSet) {
-  SavedMapTileLoader loader{DefaultMapPath, tileSet, {}};
-  loader.load();
 }
 
 struct PlacedTileDrawOrderLess {
@@ -1421,7 +1422,7 @@ struct SavedMapTileLoader {
 };
 
 void loadDefaultSavedMapTiles(TileSet &tileSet) {
-  SavedMapTileLoader{DefaultMapPath, tileSet}.load();
+  SavedMapTileLoader{DefaultMapPath, tileSet, {}}.load();
 }
 
 TileSet loadTileSet(const std::filesystem::path &directory) {
@@ -1694,12 +1695,155 @@ bool tileHasBlockingCollision(const TileSet &tileSet,
                      });
 }
 
+float safeGroundTileCellSize(const TileSet &tileSet) {
+  return tileSet.groundTileCellSize > 0.0F ? tileSet.groundTileCellSize
+                                           : FallbackGroundTileCellSize;
+}
+
+float projectedTileCellCenterYPixels(const TileDefinition &tile) {
+  const float spriteWidth = static_cast<float>(tile.size.x > 0 ? tile.size.x
+                                                               : tile.frameSize.x);
+  const float spriteHeight = static_cast<float>(tile.size.y > 0 ? tile.size.y
+                                                                : tile.frameSize.y);
+  const float diamondHeight = spriteWidth * 0.5F;
+  return std::max(diamondHeight * 0.5F, spriteHeight - diamondHeight * 0.5F);
+}
+
+glm::vec2 spriteCollisionPointForWorldPosition(const TileSet &tileSet,
+                                               const TileDefinition &tile,
+                                               const PlacedTile &placedTile,
+                                               const glm::vec3 &position) {
+  const float spriteWidth = static_cast<float>(tile.size.x > 0 ? tile.size.x
+                                                               : tile.frameSize.x);
+  const float spriteHeight = static_cast<float>(tile.size.y > 0 ? tile.size.y
+                                                                : tile.frameSize.y);
+  const float cellSize = safeGroundTileCellSize(tileSet);
+  const float localCellX = (position.x - placedTile.position.x) / cellSize;
+  const float localCellZ = (position.z - placedTile.position.z) / cellSize;
+  const float diamondHeight = spriteWidth * 0.5F;
+  const float spriteX = spriteWidth * 0.5F +
+                        (localCellX - localCellZ) * spriteWidth * 0.5F;
+  const float spriteY = projectedTileCellCenterYPixels(tile) +
+                        (localCellX + localCellZ) * diamondHeight * 0.5F;
+  return {spriteX / spriteWidth, spriteY / spriteHeight};
+}
+
+float squaredDistanceToSegment(const glm::vec2 &point, const glm::vec2 &start,
+                               const glm::vec2 &end) {
+  const glm::vec2 segment = end - start;
+  const float segmentLengthSquared = glm::dot(segment, segment);
+  if (segmentLengthSquared <= std::numeric_limits<float>::epsilon()) {
+    return glm::dot(point - start, point - start);
+  }
+
+  const float projection =
+      std::clamp(glm::dot(point - start, segment) / segmentLengthSquared, 0.0F,
+                 1.0F);
+  const glm::vec2 closest = start + segment * projection;
+  return glm::dot(point - closest, point - closest);
+}
+
+bool collisionShapeContainsSpritePoint(const CollisionShape &shape,
+                                       const TileDefinition &tile,
+                                       const glm::vec2 &point) {
+  switch (shape.type) {
+  case CollisionShapeType::FullTile:
+  case CollisionShapeType::Floor:
+  case CollisionShapeType::Aabb:
+    return point.x >= shape.min.x && point.x <= shape.max.x &&
+           point.y >= shape.min.y && point.y <= shape.max.y;
+  case CollisionShapeType::Diamond: {
+    const glm::vec2 center = (shape.min + shape.max) * 0.5F;
+    const glm::vec2 halfSize = (shape.max - shape.min) * 0.5F;
+    if (halfSize.x <= std::numeric_limits<float>::epsilon() ||
+        halfSize.y <= std::numeric_limits<float>::epsilon()) {
+      return false;
+    }
+    const glm::vec2 relative = glm::abs(point - center);
+    return relative.x / halfSize.x + relative.y / halfSize.y <= 1.0F;
+  }
+  case CollisionShapeType::Circle: {
+    const float spriteWidth = static_cast<float>(tile.size.x > 0 ? tile.size.x
+                                                                 : tile.frameSize.x);
+    const float spriteHeight = static_cast<float>(tile.size.y > 0 ? tile.size.y
+                                                                  : tile.frameSize.y);
+    const glm::vec2 pixelPoint{point.x * spriteWidth, point.y * spriteHeight};
+    const glm::vec2 pixelCenter{shape.center.x * spriteWidth,
+                                shape.center.y * spriteHeight};
+    const float pixelRadius =
+        shape.radius * std::min(spriteWidth, spriteHeight);
+    return glm::distance(pixelPoint, pixelCenter) <= pixelRadius;
+  }
+  case CollisionShapeType::Segment: {
+    const float spriteWidth = static_cast<float>(tile.size.x > 0 ? tile.size.x
+                                                                 : tile.frameSize.x);
+    const float spriteHeight = static_cast<float>(tile.size.y > 0 ? tile.size.y
+                                                                  : tile.frameSize.y);
+    const glm::vec2 pixelPoint{point.x * spriteWidth, point.y * spriteHeight};
+    const glm::vec2 pixelStart{shape.start.x * spriteWidth,
+                               shape.start.y * spriteHeight};
+    const glm::vec2 pixelEnd{shape.end.x * spriteWidth,
+                             shape.end.y * spriteHeight};
+    const float halfThickness =
+        shape.thickness * std::min(spriteWidth, spriteHeight) * 0.5F;
+    return squaredDistanceToSegment(pixelPoint, pixelStart, pixelEnd) <=
+           halfThickness * halfThickness;
+  }
+  case CollisionShapeType::None:
+    return false;
+  }
+
+  return false;
+}
+
+bool collisionShapeContainsWorldPosition(const TileSet &tileSet,
+                                         const TileDefinition &tile,
+                                         const PlacedTile &placedTile,
+                                         const CollisionShape &shape,
+                                         const glm::vec3 &position) {
+  return collisionShapeContainsSpritePoint(
+      shape, tile,
+      spriteCollisionPointForWorldPosition(tileSet, tile, placedTile, position));
+}
+
+bool collisionDefinitionContainsWorldPosition(
+    const TileSet &tileSet, const TileDefinition &tile,
+    const PlacedTile &placedTile, const TileCollisionDefinition &definition,
+    const glm::vec3 &position, CollisionShapeType requiredType,
+    float sampleRadius) {
+  const std::array<glm::vec3, 5> samplePositions{
+      position, position + glm::vec3{sampleRadius, 0.0F, 0.0F},
+      position - glm::vec3{sampleRadius, 0.0F, 0.0F},
+      position + glm::vec3{0.0F, 0.0F, sampleRadius},
+      position - glm::vec3{0.0F, 0.0F, sampleRadius}};
+
+  for (const CollisionShape &shape : definition.shapes) {
+    if (shape.type == CollisionShapeType::None) {
+      continue;
+    }
+    if (requiredType == CollisionShapeType::Floor) {
+      if (shape.type != CollisionShapeType::Floor) {
+        continue;
+      }
+    } else if (shape.type == CollisionShapeType::Floor) {
+      continue;
+    }
+
+    for (const glm::vec3 &samplePosition : samplePositions) {
+      if (collisionShapeContainsWorldPosition(tileSet, tile, placedTile, shape,
+                                             samplePosition)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 bool isInsidePlacedTileCell(const TileSet &tileSet,
                             const PlacedTile &placedTile,
                             const glm::vec3 &position, float padding) {
-  const float cellSize = tileSet.groundTileCellSize > 0.0F
-                             ? tileSet.groundTileCellSize
-                             : FallbackGroundTileCellSize;
+  const float cellSize = safeGroundTileCellSize(tileSet);
   const float halfCellSize = cellSize * 0.5F + padding;
   return std::abs(position.x - placedTile.position.x) <= halfCellSize &&
          std::abs(position.z - placedTile.position.z) <= halfCellSize;
@@ -1714,12 +1858,15 @@ bool isBlockedByMapCollision(const TileSet &tileSet, int level,
     }
 
     const TileDefinition &tile = tileSet.tiles[placedTile.tileIndex];
-    if (!tileHasBlockingCollision(tileSet, tile)) {
+    const auto collisionIterator = tileSet.collisionDefinitions.find(tile.name);
+    if (collisionIterator == tileSet.collisionDefinitions.end() ||
+        !tileHasBlockingCollision(tileSet, tile)) {
       continue;
     }
 
-    if (isInsidePlacedTileCell(tileSet, placedTile, position,
-                               CharacterCollisionRadius)) {
+    if (collisionDefinitionContainsWorldPosition(
+            tileSet, tile, placedTile, collisionIterator->second, position,
+            CollisionShapeType::None, CharacterCollisionRadius)) {
       return true;
     }
   }
@@ -1741,11 +1888,19 @@ bool hasWalkableTileAtLevel(const TileSet &tileSet, int level,
 
     const TileDefinition &tile = tileSet.tiles[placedTile.tileIndex];
     const bool isFloorLayer = placedTile.layer == 0;
-    if (!isFloorLayer && !tileHasFloorCollision(tileSet, tile)) {
+    const auto collisionIterator = tileSet.collisionDefinitions.find(tile.name);
+    if (collisionIterator != tileSet.collisionDefinitions.end() &&
+        tileHasFloorCollision(tileSet, tile)) {
+      if (collisionDefinitionContainsWorldPosition(
+              tileSet, tile, placedTile, collisionIterator->second, position,
+              CollisionShapeType::Floor, 0.0F)) {
+        return true;
+      }
       continue;
     }
 
-    if (isInsidePlacedTileCell(tileSet, placedTile, position, 0.0F)) {
+    if (isFloorLayer && isInsidePlacedTileCell(tileSet, placedTile, position,
+                                              0.0F)) {
       return true;
     }
   }
@@ -2540,14 +2695,19 @@ void drawTileSprite(const TileSet &tileSet, const TileDefinition &tile,
   const glm::vec3 screenUp =
       glm::normalize(glm::cross(screenRight, camera.forward()));
   // Ground metadata can describe a cropped sprite inside a taller logical
-  // frame. Center the visible sprite itself on worldPosition; saved-map tile
-  // alignment is already baked into PlacedTile::position so rendering and
-  // collision use the exact same anchor.
+  // frame. Treat worldPosition as the projected floor/collision-cell center,
+  // then lift tall sprites so the bottom cell authored in the collision editor
+  // lands on that same world anchor.
   const float halfWidth =
       static_cast<float>(tile.size.x) * TileSpriteWorldScale * 0.5F;
   const float halfHeight =
       static_cast<float>(tile.size.y) * TileSpriteWorldScale * 0.5F;
-  const glm::vec3 alignedWorldPosition = worldPosition;
+  const float collisionCellCenterOffset =
+      (projectedTileCellCenterYPixels(tile) -
+       static_cast<float>(tile.size.y) * 0.5F) *
+      TileSpriteWorldScale;
+  const glm::vec3 alignedWorldPosition =
+      worldPosition + screenUp * collisionCellCenterOffset;
   const float left = -halfWidth;
   const float right = halfWidth;
   const float top = halfHeight;

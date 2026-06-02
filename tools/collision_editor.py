@@ -257,7 +257,7 @@ def save_collisions(path: Path, collisions: dict[str, list[CollisionShape]]) -> 
             lines.append("")
             lines.append("[[tiles.shapes]]")
             lines.append(f"type = {_toml_string(shape.type)}")
-            if shape.type in {"aabb", "full_tile", "floor"}:
+            if shape.type in {"aabb", "full_tile", "floor", "diamond"}:
                 lines.append(f"min = {_toml_vec2(shape.min or (0.0, 0.0))}")
                 lines.append(f"max = {_toml_vec2(shape.max or (1.0, 1.0))}")
             elif shape.type == "circle":
@@ -329,7 +329,7 @@ class CollisionEditor(tk.Tk):
         self.atlas_combo.bind("<<ComboboxSelected>>", self.on_atlas_selected)
         ttk.Label(left, text="Tile filter").pack(anchor=tk.W, pady=(8, 0))
         ttk.Entry(left, textvariable=self.tile_filter).pack(fill=tk.X)
-        self.tile_list = tk.Listbox(left, width=46)
+        self.tile_list = tk.Listbox(left, width=46, exportselection=False)
         self.tile_list.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         self.tile_list.bind("<<ListboxSelect>>", self.on_tile_selected)
         self.tile_list.bind("<Double-Button-1>", lambda _event: self.redraw_canvas())
@@ -348,6 +348,7 @@ class CollisionEditor(tk.Tk):
         for label, value in (
             ("Rectangle / AABB", "aabb"),
             ("Circle", "circle"),
+            ("Diamond / rhombus", "diamond"),
             ("Side / wall line", "segment"),
             ("Full tile", "full_tile"),
             ("Floor / walkable", "floor"),
@@ -367,7 +368,7 @@ class CollisionEditor(tk.Tk):
         ttk.Label(right, text="Shapes for selected tile").pack(
             anchor=tk.W, pady=(16, 0)
         )
-        self.shape_list = tk.Listbox(right, width=38, height=18)
+        self.shape_list = tk.Listbox(right, width=38, height=18, exportselection=False)
         self.shape_list.pack(fill=tk.BOTH, expand=True)
         self.shape_list.bind("<<ListboxSelect>>", lambda _event: self.redraw_canvas())
 
@@ -513,6 +514,10 @@ class CollisionEditor(tk.Tk):
                 self.shape_list.insert(
                     tk.END,
                     f"{index}. segment start={shape.start} end={shape.end}",
+                )
+            elif shape.type == "diamond":
+                self.shape_list.insert(
+                    tk.END, f"{index}. diamond min={shape.min} max={shape.max}"
                 )
             else:
                 self.shape_list.insert(
@@ -682,7 +687,11 @@ class CollisionEditor(tk.Tk):
     def draw_shape(self, shape: CollisionShape, color: str) -> None:
         sprite_width, sprite_height = self.sprite_size()
         origin_x, origin_y = self.sprite_origin()
-        if shape.type in {"aabb", "full_tile", "floor"} and shape.min and shape.max:
+        if (
+            shape.type in {"aabb", "full_tile", "floor", "diamond"}
+            and shape.min
+            and shape.max
+        ):
             x0 = origin_x + shape.min[0] * sprite_width
             y0 = origin_y + shape.min[1] * sprite_height
             x1 = origin_x + shape.max[0] * sprite_width
@@ -690,7 +699,23 @@ class CollisionEditor(tk.Tk):
             options = {"outline": color, "width": 2}
             if shape.type == "floor":
                 options = {"outline": color, "width": 3, "dash": (4, 2)}
-            self.canvas.create_rectangle(x0, y0, x1, y1, **options)
+            if shape.type == "diamond":
+                center_x = (x0 + x1) * 0.5
+                center_y = (y0 + y1) * 0.5
+                self.canvas.create_polygon(
+                    center_x,
+                    y0,
+                    x1,
+                    center_y,
+                    center_x,
+                    y1,
+                    x0,
+                    center_y,
+                    fill="",
+                    **options,
+                )
+            else:
+                self.canvas.create_rectangle(x0, y0, x1, y1, **options)
         elif shape.type == "circle" and shape.center and shape.radius is not None:
             cx = origin_x + shape.center[0] * sprite_width
             cy = origin_y + shape.center[1] * sprite_height
@@ -764,6 +789,26 @@ class CollisionEditor(tk.Tk):
         if self.shape_type.get() == "segment":
             self.redraw_canvas()
             self.canvas.create_line(x0, y0, x1, y1, fill="#ffd000", width=4)
+        elif self.shape_type.get() == "diamond":
+            self.redraw_canvas()
+            min_x, max_x = sorted((x0, x1))
+            min_y, max_y = sorted((y0, y1))
+            center_x = (min_x + max_x) * 0.5
+            center_y = (min_y + max_y) * 0.5
+            self.canvas.create_polygon(
+                center_x,
+                min_y,
+                max_x,
+                center_y,
+                center_x,
+                max_y,
+                min_x,
+                center_y,
+                outline="#ffd000",
+                fill="",
+                width=2,
+                dash=(4, 3),
+            )
         else:
             self.redraw_canvas((x0, y0, x1, y1))
 
@@ -795,6 +840,8 @@ class CollisionEditor(tk.Tk):
             )
             radius = min(max_point[0] - min_point[0], max_point[1] - min_point[1]) * 0.5
             shape = CollisionShape(type="circle", center=center, radius=radius)
+        elif shape_type == "diamond":
+            shape = CollisionShape(type="diamond", min=min_point, max=max_point)
         elif shape_type == "full_tile":
             min_point, max_point = self.projected_cell_rect_normalized()
             shape = CollisionShape(type="full_tile", min=min_point, max=max_point)
