@@ -1393,7 +1393,8 @@ struct SavedMapTileLoader {
 };
 
 void loadDefaultSavedMapTiles(TileSet &tileSet) {
-  SavedMapTileLoader{DefaultMapPath, tileSet}.load();
+  SavedMapTileLoader loader{DefaultMapPath, tileSet, {}};
+  loader.load();
 }
 
 TileSet loadTileSet(const std::filesystem::path &directory) {
