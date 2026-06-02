@@ -7,7 +7,7 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 - GLFW window and real-time game loop.
 - GLM isometric camera math with orthographic projection, using Project Zomboid-style 60° FOV plus a 45° horizontal yaw and 30° downward pitch for 2:1 dimetric tile alignment.
 - Blue sky clear color.
-- Simple ground grid to make movement visible; its bounds are derived from the placed ground tiles so the visible grid fits the filled world area without moving tile placement.
+- Simple ground grid to make movement visible; its cell spacing is derived from the ground tile width so the visible world grid fits the tile art instead of oversized cells.
 - Loads the Tiles1x texture pack and fills the ground tile layer with `blends_natural_01_TEST_22` beneath the rest of the scene.
 - Loads `media/models/Bob.fbx` through Assimp and draws it in the world.
 - Camera follows the character model instead of panning independently.
