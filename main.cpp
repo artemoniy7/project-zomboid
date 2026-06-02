@@ -21,6 +21,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -37,6 +38,8 @@ constexpr float CharacterTransitionAnimationPlaybackSpeed = 1.35F;
 constexpr float CharacterStopToIdleBlendDuration = 0.18F;
 constexpr float CharacterStartAccelerationMinScale = 0.12F;
 constexpr float CharacterStopCoastSpeedScale = 0.55F;
+constexpr float CharacterFallGravity = 18.0F;
+constexpr float CharacterMaxFallSpeed = 24.0F;
 constexpr float CharacterIdleTurnThresholdDegrees = 22.5F;
 constexpr float CharacterIdleTurnMoveStartProgress = 0.45F;
 constexpr float CharacterMovingTurnAngularSpeedDegrees = 540.0F;
@@ -56,6 +59,8 @@ constexpr const char *IdleToWalkAnimationPath =
 constexpr const char *WalkToStopAnimationPath =
     "media/anim_x/bob/Bob_WalkToStop.fbx";
 constexpr const char *WalkAnimationPath = "media/anim_x/bob/Bob_Walk.fbx";
+constexpr const char *FallIdleAnimationPath =
+    "media/anim_x/bob/Bob_FallIdle.fbx";
 constexpr const char *IdleTurn45LAnimationPath =
     "media/anim_x/bob/Bob_IdleTurn45L.fbx";
 constexpr const char *IdleTurn45RAnimationPath =
@@ -75,6 +80,11 @@ constexpr const char *GroundTileName = "blends_natural_01_TEST_22";
 constexpr int GroundTileHalfSize = 20;
 constexpr float GroundTileLayerY = -0.01F;
 constexpr float FallbackGroundTileCellSize = 0.70710678F;
+constexpr float LevelHeightInSpritePixels = 128.0F;
+constexpr float WorldLevelHeight =
+    LevelHeightInSpritePixels * TileSpriteWorldScale;
+constexpr int MinWorldLevel = 0;
+constexpr int MaxWorldLevel = 7;
 
 struct Vertex {
   glm::vec3 position{};
@@ -153,8 +163,7 @@ struct TileSet {
   std::vector<TileAtlas> atlases;
   std::vector<TileDefinition> tiles;
   std::vector<PlacedTile> groundTiles;
-  std::unordered_map<std::string, TileCollisionDefinition>
-      collisionDefinitions;
+  std::unordered_map<std::string, TileCollisionDefinition> collisionDefinitions;
   float groundTileCellSize = FallbackGroundTileCellSize;
 
   [[nodiscard]] bool isLoaded() const {
@@ -217,6 +226,7 @@ struct CharacterAnimationClips {
   AnimationClip idleToWalk;
   AnimationClip walk;
   AnimationClip walkToStop;
+  AnimationClip fallIdle;
   AnimationClip idleTurn45L;
   AnimationClip idleTurn45R;
   AnimationClip idleTurn90L;
@@ -233,9 +243,9 @@ struct Camera {
     const float yawRadians = glm::radians(CameraYawDegrees);
     const float pitchRadians = glm::radians(CameraPitchDownDegrees);
     const float horizontalDistance = std::cos(pitchRadians);
-    const glm::vec3 isometricOffset{
-        std::sin(yawRadians) * horizontalDistance, std::sin(pitchRadians),
-        std::cos(yawRadians) * horizontalDistance};
+    const glm::vec3 isometricOffset{std::sin(yawRadians) * horizontalDistance,
+                                    std::sin(pitchRadians),
+                                    std::cos(yawRadians) * horizontalDistance};
     return target + glm::normalize(isometricOffset) * distance;
   }
 
@@ -270,6 +280,7 @@ enum class CharacterAnimationState {
   IdleToWalk,
   Walk,
   WalkToStop,
+  Falling,
   IdleTurn45L,
   IdleTurn45R,
   IdleTurn90L,
@@ -280,10 +291,12 @@ enum class CharacterAnimationState {
 
 struct Character {
   glm::vec3 position{0.0F, 0.0F, 0.0F};
+  int level = 0;
   glm::vec3 facing{0.0F, 0.0F, 1.0F};
   glm::vec3 turnStartFacing{0.0F, 0.0F, 1.0F};
   glm::vec3 turnTargetFacing{0.0F, 0.0F, 1.0F};
   float turnAngleRadians = 0.0F;
+  float verticalVelocity = 0.0F;
   float animationTime = 0.0F;
   float animationBlendTime = 0.0F;
   float animationBlendDuration = 0.0F;
@@ -302,6 +315,8 @@ struct Character {
 struct InputState {
   Camera camera;
   Character character;
+  bool wasLevelUpPressed = false;
+  bool wasLevelDownPressed = false;
 };
 
 glm::mat4 toGlm(const aiMatrix4x4 &matrix) {
@@ -486,9 +501,8 @@ void appendMesh(const aiMesh &assimpMesh, const glm::mat4 &transform,
     const glm::vec3 sourcePosition = toGlm(assimpMesh.mVertices[vertexIndex]);
     const glm::vec4 transformedPosition =
         transform * glm::vec4{sourcePosition, 1.0F};
-    const glm::vec3 transformedPosition3{transformedPosition.x,
-                                         transformedPosition.y,
-                                         transformedPosition.z};
+    const glm::vec3 transformedPosition3{
+        transformedPosition.x, transformedPosition.y, transformedPosition.z};
 
     glm::vec3 normal{0.0F, 1.0F, 0.0F};
     glm::vec3 staticNormal{0.0F, 1.0F, 0.0F};
@@ -1079,8 +1093,8 @@ void parseTileCollisionMetadata(
       currentTileName = parseTomlStringValue(value);
       definitions.try_emplace(currentTileName);
     } else if (hasCurrentShape && key == "type") {
-      currentShape.type = collisionShapeTypeFromString(
-          parseTomlStringValue(value));
+      currentShape.type =
+          collisionShapeTypeFromString(parseTomlStringValue(value));
     } else if (hasCurrentShape && key == "min") {
       const std::vector<float> values = parseTomlFloatArray(lines, lineIndex);
       if (values.size() >= 2) {
@@ -1225,8 +1239,7 @@ void buildGroundTilePlacements(TileSet &tileSet) {
     for (int x = -GroundTileHalfSize; x <= GroundTileHalfSize; ++x) {
       tileSet.groundTiles.push_back(PlacedTile{
           groundTileIndex,
-          {static_cast<float>(x) * tileSet.groundTileCellSize,
-           GroundTileLayerY,
+          {static_cast<float>(x) * tileSet.groundTileCellSize, GroundTileLayerY,
            static_cast<float>(z) * tileSet.groundTileCellSize}});
     }
   }
@@ -1433,8 +1446,8 @@ float walkToStopCoastScale(const Character &character,
     return 0.0F;
   }
 
-  const float transitionProgress = std::clamp(
-      character.animationTime / transitionDuration, 0.0F, 1.0F);
+  const float transitionProgress =
+      std::clamp(character.animationTime / transitionDuration, 0.0F, 1.0F);
   const float remainingTransition = 1.0F - transitionProgress;
   return CharacterStopCoastSpeedScale * remainingTransition *
          remainingTransition;
@@ -1447,6 +1460,88 @@ idleTurnAnimationForState(CharacterAnimationState animationState,
 const AnimationClip &
 clipForAnimationState(CharacterAnimationState animationState,
                       const CharacterAnimationClips &animations);
+
+float worldYForLevel(int level) {
+  return static_cast<float>(level) * WorldLevelHeight;
+}
+
+bool hasGroundTileAtPosition(const TileSet &tileSet,
+                             const glm::vec3 &position) {
+  if (tileSet.groundTiles.empty()) {
+    return true;
+  }
+
+  const float cellSize = tileSet.groundTileCellSize > 0.0F
+                             ? tileSet.groundTileCellSize
+                             : FallbackGroundTileCellSize;
+  const float halfCellSize = cellSize * 0.5F;
+  for (const PlacedTile &placedTile : tileSet.groundTiles) {
+    if (std::abs(position.x - placedTile.position.x) <= halfCellSize &&
+        std::abs(position.z - placedTile.position.z) <= halfCellSize) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool hasWalkableTileAtLevel(const TileSet &tileSet, int level,
+                            const glm::vec3 &position) {
+  if (level == MinWorldLevel) {
+    return hasGroundTileAtPosition(tileSet, position);
+  }
+
+  return false;
+}
+
+std::optional<float> supportedWorldYAtOrBelow(const TileSet &tileSet,
+                                              const Character &character) {
+  for (int level = character.level; level >= MinWorldLevel; --level) {
+    if (hasWalkableTileAtLevel(tileSet, level, character.position)) {
+      return worldYForLevel(level);
+    }
+  }
+
+  return std::nullopt;
+}
+
+void beginCharacterFall(Character &character, const glm::vec3 &fallFacing) {
+  if (character.animationState == CharacterAnimationState::Falling) {
+    return;
+  }
+
+  clearCharacterAnimationBlend(character);
+  if (glm::length(fallFacing) > std::numeric_limits<float>::epsilon()) {
+    character.facing =
+        glm::normalize(glm::vec3{fallFacing.x, 0.0F, fallFacing.z});
+  }
+  character.animationState = CharacterAnimationState::Falling;
+  character.animationTime = 0.0F;
+  character.isMoving = false;
+  character.verticalVelocity = std::min(character.verticalVelocity, 0.0F);
+}
+
+void updateFallingCharacter(Character &character, const TileSet &tileSet,
+                            float deltaTime) {
+  character.animationTime += deltaTime * CharacterAnimationPlaybackSpeed;
+  character.verticalVelocity =
+      std::max(character.verticalVelocity - CharacterFallGravity * deltaTime,
+               -CharacterMaxFallSpeed);
+  character.position.y += character.verticalVelocity * deltaTime;
+
+  const std::optional<float> supportY =
+      supportedWorldYAtOrBelow(tileSet, character);
+  if (!supportY.has_value() || character.position.y > *supportY) {
+    return;
+  }
+
+  character.position.y = *supportY;
+  character.level = static_cast<int>(std::round(*supportY / WorldLevelHeight));
+  character.verticalVelocity = 0.0F;
+  character.animationState = CharacterAnimationState::Idle;
+  character.animationTime = 0.0F;
+  clearCharacterAnimationBlend(character);
+}
 
 float idleTurnMovementScale(const Character &character,
                             const CharacterAnimationClips &animations) {
@@ -1627,10 +1722,32 @@ void updateCharacterAnimationState(Character &character, bool wantsToMove,
 }
 
 void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
-                     const CharacterAnimationClips &animations) {
+                     const CharacterAnimationClips &animations,
+                     const TileSet &tileSet) {
   if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
     glfwSetWindowShouldClose(window, GLFW_TRUE);
   }
+
+  const bool isLevelUpPressed =
+      glfwGetKey(window, GLFW_KEY_PAGE_UP) == GLFW_PRESS;
+  const bool isLevelDownPressed =
+      glfwGetKey(window, GLFW_KEY_PAGE_DOWN) == GLFW_PRESS;
+  if (input.character.animationState == CharacterAnimationState::Falling) {
+    input.wasLevelUpPressed = isLevelUpPressed;
+    input.wasLevelDownPressed = isLevelDownPressed;
+    updateFallingCharacter(input.character, tileSet, deltaTime);
+    input.camera.target = input.character.position;
+    return;
+  }
+  if (isLevelUpPressed && !input.wasLevelUpPressed) {
+    input.character.level = std::min(input.character.level + 1, MaxWorldLevel);
+  }
+  if (isLevelDownPressed && !input.wasLevelDownPressed) {
+    input.character.level = std::max(input.character.level - 1, MinWorldLevel);
+  }
+  input.wasLevelUpPressed = isLevelUpPressed;
+  input.wasLevelDownPressed = isLevelDownPressed;
+  input.character.position.y = worldYForLevel(input.character.level);
 
   glm::vec3 movement{0.0F, 0.0F, 0.0F};
   if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
@@ -1682,6 +1799,12 @@ void processKeyboard(GLFWwindow *window, InputState &input, float deltaTime,
     }
   }
 
+  input.character.position.y = worldYForLevel(input.character.level);
+  if (!hasWalkableTileAtLevel(tileSet, input.character.level,
+                              input.character.position)) {
+    beginCharacterFall(input.character,
+                       wantsToMove ? moveDirection : input.character.facing);
+  }
   input.camera.target = input.character.position;
 }
 
@@ -1690,7 +1813,7 @@ void loadMatrix(GLenum matrixMode, const glm::mat4 &matrix) {
   glLoadMatrixf(glm::value_ptr(matrix));
 }
 
-void drawGroundGrid(const TileSet &tileSet) {
+void drawGroundGrid(const TileSet &tileSet, float levelY, bool isActiveLevel) {
   float minX = static_cast<float>(-GroundTileHalfSize);
   float maxX = static_cast<float>(GroundTileHalfSize);
   float minZ = static_cast<float>(-GroundTileHalfSize);
@@ -1717,17 +1840,21 @@ void drawGroundGrid(const TileSet &tileSet) {
   const float minBoundaryZ = minZ - cellSize * 0.5F;
   const float maxBoundaryZ = maxZ + cellSize * 0.5F;
 
-  glColor3f(0.28F, 0.42F, 0.24F);
+  if (isActiveLevel) {
+    glColor3f(0.32F, 0.52F, 0.78F);
+  } else {
+    glColor3f(0.28F, 0.42F, 0.24F);
+  }
   glBegin(GL_LINES);
   for (float x = minBoundaryX; x <= maxBoundaryX + cellSize * 0.001F;
        x += cellSize) {
-    glVertex3f(x, 0.0F, minBoundaryZ);
-    glVertex3f(x, 0.0F, maxBoundaryZ);
+    glVertex3f(x, levelY, minBoundaryZ);
+    glVertex3f(x, levelY, maxBoundaryZ);
   }
   for (float z = minBoundaryZ; z <= maxBoundaryZ + cellSize * 0.001F;
        z += cellSize) {
-    glVertex3f(minBoundaryX, 0.0F, z);
-    glVertex3f(maxBoundaryX, 0.0F, z);
+    glVertex3f(minBoundaryX, levelY, z);
+    glVertex3f(maxBoundaryX, levelY, z);
   }
   glEnd();
 }
@@ -2078,7 +2205,8 @@ void drawModelWithBoneMatrices(const Model &model,
 
 bool isLoopingAnimationState(CharacterAnimationState animationState) {
   return animationState == CharacterAnimationState::Idle ||
-         animationState == CharacterAnimationState::Walk;
+         animationState == CharacterAnimationState::Walk ||
+         animationState == CharacterAnimationState::Falling;
 }
 
 float characterAnimationBlendFactor(const Character &character) {
@@ -2238,6 +2366,9 @@ clipForAnimationState(CharacterAnimationState animationState,
   case CharacterAnimationState::WalkToStop:
     return animations.walkToStop.isLoaded() ? animations.walkToStop
                                             : animations.idle;
+  case CharacterAnimationState::Falling:
+    return animations.fallIdle.isLoaded() ? animations.fallIdle
+                                          : animations.idle;
   // The 45- and 90-degree source clips are named opposite to the direction
   // they play.
   case CharacterAnimationState::IdleTurn45L:
@@ -2309,7 +2440,11 @@ void renderScene(const Camera &camera, const Character &character,
   loadMatrix(GL_MODELVIEW, camera.viewMatrix());
 
   drawTileSet(tileSet, camera);
-  drawGroundGrid(tileSet);
+  drawGroundGrid(tileSet, GroundTileLayerY, false);
+  if (character.level > MinWorldLevel) {
+    drawGroundGrid(
+        tileSet, static_cast<float>(character.level) * WorldLevelHeight, true);
+  }
 
   glPushMatrix();
   glTranslatef(character.position.x, character.position.y,
@@ -2375,6 +2510,8 @@ int main() {
       loadAnimationClip(WalkAnimationPath, "Bob_Walk", true, true);
   animations.walkToStop =
       loadAnimationClip(WalkToStopAnimationPath, "Bob_WalkToStop", true, true);
+  animations.fallIdle =
+      loadAnimationClip(FallIdleAnimationPath, "Bob_FallIdle.002", true, true);
   animations.idleTurn45L = loadAnimationClip(
       IdleTurn45LAnimationPath, "Bob_IdleTurn45L.001", false, true);
   animations.idleTurn45R = loadAnimationClip(
@@ -2391,6 +2528,7 @@ int main() {
   printAnimationMatchReport(bodyModel, animations.idleToWalk);
   printAnimationMatchReport(bodyModel, animations.walk);
   printAnimationMatchReport(bodyModel, animations.walkToStop);
+  printAnimationMatchReport(bodyModel, animations.fallIdle);
   printAnimationMatchReport(bodyModel, animations.idleTurn45L);
   printAnimationMatchReport(bodyModel, animations.idleTurn45R);
   printAnimationMatchReport(bodyModel, animations.idleTurn90L);
@@ -2405,7 +2543,7 @@ int main() {
     const float deltaTime = currentTime - previousTime;
     previousTime = currentTime;
 
-    processKeyboard(window, input, deltaTime, animations);
+    processKeyboard(window, input, deltaTime, animations, tileSet);
 
     int framebufferWidth = 0;
     int framebufferHeight = 0;
