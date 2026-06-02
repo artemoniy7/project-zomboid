@@ -377,7 +377,7 @@ class CollisionEditor(tk.Tk):
     def open_folder(self, folder: Path, atlas_filter: Path | None) -> None:
         try:
             tiles = load_tile_metadata(folder, atlas_filter)
-        except Exception as exc:  # noqa: BLE001 - UI should show parser errors.
+        except Exception as exc:
             messagebox.showerror("Could not load tiles", str(exc))
             return
         self.state_data.folder = folder
