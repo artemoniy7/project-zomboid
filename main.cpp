@@ -71,7 +71,7 @@ constexpr const char *IdleTurn180RAnimationPath =
 constexpr const char *BodyTexturePath = "media/textures/Body/MaleBody01.png";
 constexpr const char *Tiles1xTexturePackPath = "media/texturepacks/Tiles1x";
 constexpr float TileSpriteWorldScale = 1.0F / 64.0F;
-constexpr const char *GroundTileName = "blends_grassoverlays_01_0";
+constexpr const char *GroundTileName = "blends_natural_01_TEST_22";
 constexpr int GroundTileHalfSize = 20;
 constexpr float GroundTileLayerY = -0.01F;
 
