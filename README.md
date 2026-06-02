@@ -7,8 +7,8 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 - GLFW window and real-time game loop.
 - GLM isometric camera math with orthographic projection, using Project Zomboid-style 60° FOV plus a 45° horizontal yaw and 30° downward pitch for 2:1 dimetric tile alignment.
 - Blue sky clear color.
-- Simple ground grid to make movement visible.
-- Loads the Tiles1x texture pack and fills the ground tile layer with `blends_grassoverlays_01_0` beneath the rest of the scene.
+- Simple ground grid to make movement visible; its cell spacing is derived from the ground tile width so the visible world grid fits the tile art instead of oversized cells.
+- Loads the Tiles1x texture pack and fills the ground tile layer with `blends_natural_01_TEST_22` beneath the rest of the scene.
 - Loads `media/models/Bob.fbx` through Assimp and draws it in the world.
 - Camera follows the character model instead of panning independently.
 - WASD moves the character like Project Zomboid: up/down/left/right on screen across diagonal world-tile directions.
@@ -28,6 +28,17 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 ## Tuning movement and animation speed
 
 Movement speed is controlled by `CharacterMoveSpeed` near the top of `main.cpp`. Looping animation playback speed is controlled separately by `CharacterAnimationPlaybackSpeed`, while one-shot start/stop clips use `CharacterTransitionAnimationPlaybackSpeed` so they can stay snappy without speeding up idle/walk loops. When movement keys are released, `CharacterStopCoastSpeedScale` controls the small decelerating forward coast during `Bob_WalkToStop`. Use values below `1.0F` to slow animation down or above `1.0F` to speed it up.
+
+## Collision editor
+
+A small Python/Tkinter utility is available for authoring per-tile collision metadata without hard-coding shapes in C++:
+
+```bash
+python3 tools/collision_editor.py media/texturepacks/Tiles1x
+python3 tools/collision_editor.py media/texturepacks/Tiles1x/Tiles_Test.png
+```
+
+Use **Open folder** to load every atlas in a texture-pack directory, or **Open PNG atlas** to pick one `.png` file directly. The editor reads the matching atlas `.toml`, cuts the atlas into individual tile sprites, lets you switch with **Prev tile** / **Next tile**, and draws the selected sprite over a projected in-game-style cell guide. Draw rectangle or circle collision shapes over the tile, or add a full-tile collision. **Save collisions.toml** writes normalized collision data next to the tile metadata. The engine loads `collisions.toml` from the same texture-pack directory at startup and reports how many collision shapes were found; movement resolution can then consume those definitions when the collision world is wired in.
 
 ## Build
 
