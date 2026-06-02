@@ -661,7 +661,7 @@ class MapEditor(tk.Tk):
         if tile is None:
             self.map_canvas.create_text(
                 cx,
-                cy, 
+                cy,
                 fill="#ff8080",
                 text=f"L{layer}: {saved_tile.tile_name}",
                 width=120,
