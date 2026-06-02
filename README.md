@@ -23,7 +23,15 @@ A tiny isometric world-rendering prototype built with C++20, GLFW, OpenGL, GLM, 
 | `W` / `S` | Move up / down on screen across diagonal tiles |
 | `A` / `D` | Move left / right on screen across diagonal tiles |
 | Mouse wheel | Zoom camera in / out |
+| `Page Up` / `Page Down` | Move the character between walkable building levels |
 | `Esc` | Close the window |
+
+
+## Walkable levels and wall height
+
+The engine now treats a **level** as one full wall-storey above the previous floor. In this prototype the wall-storey height is fixed by the tile-art scale: `TileSpriteWorldScale` converts pixels to world units (`1 / 64`), and `WorldLevelHeight` uses a 128-pixel wall frame, so each floor is `2.0` world units above the previous one. That makes level `0` ground, level `1` `2.0` units high, level `2` `4.0` units high, and so on.
+
+This is intentionally derived from sprite dimensions instead of a guessed real-world meter value. If the wall art later uses a different storey frame height, change `LevelHeightInSpritePixels` near the tile constants in `main.cpp`; all walkable levels and the camera follow target will keep using the same formula.
 
 ## Tuning movement and animation speed
 
