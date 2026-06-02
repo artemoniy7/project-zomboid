@@ -38,7 +38,7 @@ python3 tools/collision_editor.py media/texturepacks/Tiles1x
 python3 tools/collision_editor.py media/texturepacks/Tiles1x/Tiles_Test.png
 ```
 
-Use **Open folder** to load every atlas in a texture-pack directory, or **Open PNG atlas** to pick one `.png` file directly. The editor reads the matching atlas `.toml`, cuts the atlas into individual tile sprites, lets you switch with **Prev tile** / **Next tile**, and draws the selected sprite over a projected in-game-style cell guide. Draw rectangle or circle collision shapes over the tile, or add a full-tile collision. **Save collisions.toml** writes normalized collision data next to the tile metadata. The engine loads `collisions.toml` from the same texture-pack directory at startup and reports how many collision shapes were found; movement resolution can then consume those definitions when the collision world is wired in.
+Use **Open folder** to load every atlas in a texture-pack directory, or **Open PNG atlas** to pick one `.png` file directly. The editor reads the matching atlas `.toml`, including multi-line `pos`/`size` arrays, cuts the atlas into individual tile sprites, automatically selects the first loaded tile, lets you switch with **Prev tile** / **Next tile**, and draws the selected sprite over a projected in-game-style cell guide. Draw rectangle or circle collision shapes over the tile, or add a full-tile collision. **Save collisions.toml** writes normalized collision data next to the tile metadata. The engine loads `collisions.toml` from the same texture-pack directory at startup and reports how many collision shapes were found; movement resolution can then consume those definitions when the collision world is wired in.
 
 ## Build
 
